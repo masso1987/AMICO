@@ -4,6 +4,8 @@ const EnvSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'staging', 'production']).default('development'),
     PORT: z.coerce.number().int().default(3000),
+    /** 127.0.0.1 on a shared server behind Nginx; 0.0.0.0 inside Docker. */
+    HOST: z.string().default('0.0.0.0'),
     DATABASE_URL: z.string().url(),
     REDIS_URL: z.string().default('redis://localhost:6379'),
     /** 32-byte key, base64. Encrypts SIM numbers and staff TOTP secrets at rest. */

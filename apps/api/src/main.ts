@@ -10,8 +10,8 @@ async function main() {
   const env = loadEnv(); // fails fast on bad configuration
   const app = await NestFactory.create(AppModule);
   configureApp(app);
-  await app.listen(env.PORT);
-  Logger.log(`AMICO API on :${env.PORT} (${env.NODE_ENV}${env.SIMULATION_MODE ? ', SIMULATION MODE' : ''}) — docs at /docs`, 'Bootstrap');
+  await app.listen(env.PORT, env.HOST);
+  Logger.log(`AMICO API on ${env.HOST}:${env.PORT} (${env.NODE_ENV}${env.SIMULATION_MODE ? ', SIMULATION MODE' : ''}) — docs at /docs`, 'Bootstrap');
 }
 
 void main();
