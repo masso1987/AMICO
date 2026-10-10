@@ -1,4 +1,4 @@
-import { Body, Controller, Global, HttpCode, HttpStatus, Inject, Injectable, Module, Post } from '@nestjs/common';
+import { Body, Controller, Get, Global, HttpCode, HttpStatus, Inject, Injectable, Module, Post } from '@nestjs/common';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -10,7 +10,7 @@ import { DomainError } from '../common/errors';
 import { ZodPipe } from '../common/zod.pipe';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { AuthGuard } from './auth.guard';
+import { AuthGuard, CurrentCustomer, CustomerAuth, type CustomerPrincipal } from './auth.guard';
 
 const Password = z.string().min(10, 'Use at least 10 characters').max(200);
 const RegisterSchema = z.object({ phone: Msisdn, fullName: z.string().trim().min(2).max(120), password: Password });
@@ -45,6 +45,11 @@ export class AuthService {
     const c = await this.prisma.customer.findUnique({ where: { phone: input.phone } });
     if (!(await this.verify(c?.passwordHash, input.password)) || !c?.active) throw INVALID();
     return { accessToken: await this.jwt.signAsync({ sub: c.id, typ: 'customer' }, { expiresIn: this.env.JWT_CUSTOMER_TTL as never }) };
+  }
+
+  async me(customerId: string) {
+    const c = await this.prisma.customer.findUniqueOrThrow({ where: { id: customerId } });
+    return { id: c.id, phone: c.phone, fullName: c.fullName, phoneVerified: c.phoneVerifiedAt !== null, createdAt: c.createdAt };
   }
 
   async loginStaff(input: z.infer<typeof StaffLoginSchema>, ip?: string) {
@@ -84,6 +89,12 @@ export class AuthController {
   @HttpCode(200)
   loginCustomer(@Body(new ZodPipe(CustomerLoginSchema)) body: z.infer<typeof CustomerLoginSchema>) {
     return this.auth.loginCustomer(body);
+  }
+
+  @Get('customer/me')
+  @CustomerAuth()
+  me(@CurrentCustomer() c: CustomerPrincipal) {
+    return this.auth.me(c.id);
   }
 
   @Post('staff/login')

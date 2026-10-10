@@ -12,6 +12,7 @@ Monorepo for the Cameroon MoMo / Orange Money / airtime exchange platform descri
 
 ```
 apps/
+  web/                 Next.js customer web app (sign-up, quotes, payment, tracking, receipts)
   api/                 NestJS REST API + BullMQ worker (same image, two entrypoints)
     prisma/            schema.prisma, migrations (incl. DB-level financial controls), seed
     src/               modules — see "API map" below
@@ -26,7 +27,7 @@ infra/docker/          API Dockerfile, staging/prod compose
 docker-compose.yml     local Postgres + Redis (+ optional API container)
 ```
 
-Not yet built: the Expo mobile app, Next.js customer web and Next.js admin dashboard (P3–P4 UI), OTP phone verification and staff TOTP (stubs marked `TODO(P1)`), object storage and malware scanning for evidence (`TODO(P5)`), real provider adapters (P5).
+Not yet built: the Next.js admin dashboard and the Expo mobile app, OTP phone verification and staff TOTP (stubs marked `TODO(P1)`), object storage and malware scanning for evidence (`TODO(P5)`), real provider adapters (P5).
 
 ## Quick start
 
@@ -43,7 +44,11 @@ pnpm --filter @amico/api exec prisma migrate deploy
 pnpm --filter @amico/api prisma:seed          # SEED_DEMO=1 in .env enables 4 demo routes on the mock
 pnpm build
 pnpm dev:api                                  # http://localhost:3000, Swagger at /docs
+cp apps/web/.env.example apps/web/.env.local  # API_URL=http://localhost:3000
+pnpm --filter @amico/web dev                  # http://localhost:3001 — the customer web app
 ```
+
+The web app never calls the API from the browser: its own server routes hold the session in an httpOnly cookie and forward only customer endpoints (`apps/web/src/app/api/proxy`). All prices and fees come from the API; the web app only displays them.
 
 Seeded staff (dev only, password from `SEED_STAFF_PASSWORD`, default `ChangeMe!2026`):
 `admin@`, `finance@`, `ops1@`, `ops2@`, `support@amico.local`.

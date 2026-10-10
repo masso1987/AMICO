@@ -106,7 +106,7 @@ export function calculateQuote(input: QuoteInput): QuoteResult {
         reference: null,
       };
       if (providerFee.status === 'ESTIMATE') {
-        assumptions.push(`Provider fee of ${providerFeeAmount} FCFA is an estimate (${describeFee(providerFee.fee)}); the final amount may differ.`);
+        assumptions.push(`The operator fee of ${providerFeeAmount} FCFA is an estimate, so the amount received may differ slightly.`);
       }
       break;
   }

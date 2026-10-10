@@ -181,7 +181,11 @@ export class TransactionsService {
       simulated: t.isSimulated,
       simulationNotice: t.isSimulated ? 'SIMULATION — no real money or airtime is moved for this transaction.' : null,
       state: t.state,
-      service: { code: t.service.code, name: t.service.name },
+      service: { code: t.service.code, name: t.service.name, sourceAsset: t.service.sourceAsset, destinationAsset: t.service.destinationAsset },
+      conversionRate: (() => {
+        const ppm = (t.acceptedTerms as { quote?: { conversionRatePpm?: number } }).quote?.conversionRatePpm ?? 1_000_000;
+        return ppm === 1_000_000 ? null : ppm / 1_000_000;
+      })(),
       amount: t.amount,
       customerPays: t.customerPays,
       platformFee: t.platformFee,

@@ -8,3 +8,5 @@ coverage
 *.log
 uploads/
 apps/api/src/generated/
+.next
+next-env.d.ts
