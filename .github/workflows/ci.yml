@@ -1,0 +1,45 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: amico
+          POSTGRES_PASSWORD: amico_dev
+          POSTGRES_DB: amico
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U amico" --health-interval 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    env:
+      TEST_DATABASE_URL: postgresql://amico:amico_dev@localhost:5432/amico_test?schema=public
+      DATABASE_URL: postgresql://amico:amico_dev@localhost:5432/amico?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @amico/api exec prisma generate
+      - run: pnpm turbo run build typecheck
+      - run: pnpm turbo run test --filter='./packages/*'
+      - name: API unit + e2e tests (real Postgres)
+        run: pnpm --filter @amico/api test
+      - name: Migrations match schema.prisma (drift check)
+        working-directory: apps/api
+        run: |
+          psql "postgresql://amico:amico_dev@localhost:5432/amico" -c "CREATE DATABASE amico_shadow"
+          SHADOW_DATABASE_URL="postgresql://amico:amico_dev@localhost:5432/amico_shadow" \
+            pnpm exec prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema prisma/schema.prisma \
+            --exit-code

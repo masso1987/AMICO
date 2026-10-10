@@ -1,0 +1,36 @@
+# Staging / production shape: API and worker as separate processes, secrets from
+# the environment (or Docker secrets), no demo seed, no published DB ports.
+# Real-money processing stays off: with SIMULATION_MODE=false and no real adapters
+# registered, every route reports "capability not verified" and cannot be enabled.
+#
+#   docker compose -f infra/docker/compose.staging.yml --env-file /secure/amico.env up -d
+services:
+  api:
+    image: ${AMICO_IMAGE:-amico-api:latest}
+    environment:
+      NODE_ENV: ${NODE_ENV:-staging}
+      DATABASE_URL: ${DATABASE_URL:?}
+      REDIS_URL: ${REDIS_URL:?}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?}
+      JWT_SECRET: ${JWT_SECRET:?}
+      CALLBACK_SHARED_SECRET: ${CALLBACK_SHARED_SECRET:?}
+      SIMULATION_MODE: ${SIMULATION_MODE:-true}
+      RUN_WORKERS: "false"
+      USE_QUEUE: "true"
+    ports: ["127.0.0.1:3000:3000"] # behind the TLS reverse proxy
+    restart: unless-stopped
+
+  worker:
+    image: ${AMICO_IMAGE:-amico-api:latest}
+    command: ["node", "dist/worker.js"]
+    environment:
+      NODE_ENV: ${NODE_ENV:-staging}
+      DATABASE_URL: ${DATABASE_URL:?}
+      REDIS_URL: ${REDIS_URL:?}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?}
+      JWT_SECRET: ${JWT_SECRET:?}
+      CALLBACK_SHARED_SECRET: ${CALLBACK_SHARED_SECRET:?}
+      SIMULATION_MODE: ${SIMULATION_MODE:-true}
+      RUN_WORKERS: "true"
+      USE_QUEUE: "true"
+    restart: unless-stopped

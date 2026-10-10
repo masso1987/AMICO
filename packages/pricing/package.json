@@ -1,0 +1,20 @@
+{
+  "name": "@amico/pricing",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pure, integer-only quote and fee engine. Imported by the API and worker only — never by clients.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.2.0",
+    "fast-check": "^4.1.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.2.0"
+  }
+}

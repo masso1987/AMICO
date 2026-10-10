@@ -1,0 +1,600 @@
+// AMICO — authoritative data model.
+// Money: whole FCFA in Int columns. Never Float.
+// Immutable tables (ledger, history, audit) are protected by triggers in the
+// "immutability" migration — the app role cannot UPDATE or DELETE them.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+  runtime      = "nodejs"
+  importFileExtension = ""
+}
+
+// Connection URL lives in prisma.config.ts (Prisma 7).
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------- enums
+
+enum Operator {
+  MTN
+  ORANGE
+}
+
+enum Asset {
+  MTN_MOMO
+  ORANGE_MONEY
+  MTN_AIRTIME
+  ORANGE_AIRTIME
+  MTN_DATA
+  ORANGE_DATA
+}
+
+enum SimAccountType {
+  BUSINESS
+  NORMAL
+}
+
+enum ProcessingMethod {
+  API
+  MANUAL_SOURCE
+}
+
+enum ProviderCapabilityKind {
+  COLLECT
+  DISBURSE
+  AIRTIME_TOPUP
+  DATA_BUNDLE
+  STATUS_QUERY
+}
+
+enum ServiceStatus {
+  DISABLED
+  ENABLED
+}
+
+enum StaffRole {
+  ADMIN
+  FINANCE
+  OPERATIONS
+  SUPPORT
+}
+
+enum RuleStatus {
+  DRAFT
+  PENDING_APPROVAL
+  ACTIVE
+  REJECTED
+  RETIRED
+}
+
+enum FeeType {
+  FIXED
+  PERCENTAGE
+  PERCENTAGE_PLUS_FIXED
+}
+
+enum DeductionMethod {
+  DEDUCT_FROM_SOURCE
+  DEDUCT_FROM_DESTINATION
+  ADD_TO_PAYMENT
+}
+
+enum RoundingDirection {
+  UP
+  DOWN
+  HALF_UP
+}
+
+enum ProviderFeeSource {
+  VERIFIED
+  ESTIMATE
+}
+
+enum TransactionState {
+  CREATED
+  QUOTE_PENDING_CONFIRMATION
+  AWAITING_SOURCE_PAYMENT
+  AWAITING_MANUAL_VERIFICATION
+  SOURCE_VERIFIED
+  PAYMENT_PROCESSING
+  PAYOUT_PROCESSING
+  DELIVERY_PENDING
+  COMPLETED
+  REJECTED
+  FAILED
+  REFUND_PENDING
+  REFUNDED
+  UNDER_REVIEW
+}
+
+enum ActorType {
+  CUSTOMER
+  STAFF
+  SYSTEM
+  PROVIDER
+}
+
+enum RiskLevel {
+  LOW
+  HIGH
+}
+
+enum VerificationStatus {
+  AWAITING_CUSTOMER_REFERENCE
+  PENDING
+  AWAITING_SECOND_APPROVAL
+  CONFIRMED
+  REJECTED
+  ON_HOLD
+  ESCALATED
+}
+
+enum OperationKind {
+  COLLECT
+  DISBURSE
+  AIRTIME_TOPUP
+  DATA_BUNDLE
+  REFUND
+}
+
+enum OperationStatus {
+  REQUESTED
+  PENDING
+  UNKNOWN
+  SUCCEEDED
+  FAILED
+}
+
+enum LedgerBook {
+  REAL
+  SIMULATED
+}
+
+enum LedgerAccountType {
+  ASSET
+  LIABILITY
+  REVENUE
+  EXPENSE
+}
+
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  REJECTED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+// ---------------------------------------------------------------- identity
+
+model Customer {
+  id              String    @id @default(uuid())
+  phone           String    @unique
+  fullName        String
+  passwordHash    String
+  phoneVerifiedAt DateTime?
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  quotes        Quote[]
+  transactions  Transaction[]
+  evidenceFiles EvidenceFile[]
+  notifications Notification[]
+}
+
+model StaffUser {
+  id           String      @id @default(uuid())
+  email        String      @unique
+  fullName     String
+  passwordHash String
+  roles        StaffRole[]
+  /// TOTP secret, encrypted with APP_ENCRYPTION_KEY. Enrolment flow lands in P1 hardening.
+  totpSecretEncrypted String?
+  active       Boolean     @default(true)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+}
+
+// ---------------------------------------------------------------- SIMs and providers
+
+/// The four operational SIM accounts. No PIN or operator secret is ever stored here.
+model SimAccount {
+  id                 String           @id @default(uuid())
+  code               String           @unique
+  label              String
+  operator           Operator
+  type               SimAccountType
+  /// AES-256-GCM ciphertext of the MSISDN.
+  msisdnEncrypted    String
+  /// Shown in general views.
+  msisdnMasked       String
+  processingMethod   ProcessingMethod
+  /// Business SIMs: which provider integration they are attached to (credentials live in the secret store).
+  providerCode       String?
+  active             Boolean          @default(false)
+  notes              String           @default("")
+  lastVerifiedAt     DateTime?
+  lastVerifiedStatus String?
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  receivingServices Service[]
+}
+
+model Provider {
+  id        String   @id @default(uuid())
+  code      String   @unique
+  name      String
+  simulated Boolean
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  capabilities ProviderCapability[]
+  feeRules     ProviderFeeRule[]
+}
+
+/// Business enablement of a provider capability. Technical support alone is not enough:
+/// a capability counts only when enabled AND verifiedAt is set.
+model ProviderCapability {
+  id           String                 @id @default(uuid())
+  providerId   String
+  provider     Provider               @relation(fields: [providerId], references: [id])
+  operator     Operator
+  capability   ProviderCapabilityKind
+  enabled      Boolean                @default(false)
+  verifiedAt   DateTime?
+  verifiedById String?
+  notes        String                 @default("")
+  updatedAt    DateTime               @updatedAt
+
+  @@unique([providerId, operator, capability])
+}
+
+// ---------------------------------------------------------------- catalogue and pricing
+
+model Service {
+  id                        String           @id @default(uuid())
+  code                      String           @unique
+  name                      String
+  sourceAsset               Asset
+  destinationAsset          Asset
+  processingMethod          ProcessingMethod
+  status                    ServiceStatus    @default(DISABLED)
+  /// [{ operator, capability }]
+  requiredCapabilities      Json
+  receivingSimId            String?
+  receivingSim              SimAccount?      @relation(fields: [receivingSimId], references: [id])
+  quoteTtlSeconds           Int              @default(600)
+  allowEstimatedProviderFee Boolean          @default(false)
+  /// At or above this amount, manual verification needs two approvers.
+  dualApprovalThreshold     Int              @default(50000)
+  verificationNotes         String           @default("")
+  createdAt                 DateTime         @default(now())
+  updatedAt                 DateTime         @updatedAt
+
+  pricingRules PricingRule[]
+  quotes       Quote[]
+  transactions Transaction[]
+}
+
+/// Versioned, never edited once ACTIVE. Approval requires a second user (maker-checker).
+model PricingRule {
+  id                String            @id @default(uuid())
+  serviceId         String
+  service           Service           @relation(fields: [serviceId], references: [id])
+  version           Int
+  status            RuleStatus        @default(DRAFT)
+  feeType           FeeType
+  percentageBps     Int               @default(0)
+  fixedFee          Int               @default(0)
+  minFee            Int               @default(0)
+  maxFee            Int?
+  minAmount         Int
+  maxAmount         Int
+  deductionMethod   DeductionMethod
+  conversionRatePpm Int               @default(1000000)
+  feeRounding       RoundingDirection @default(UP)
+  deliveryRounding  RoundingDirection @default(DOWN)
+  effectiveFrom     DateTime
+  effectiveTo       DateTime?
+  changeReason      String
+  createdById       String
+  approvedById      String?
+  approvedAt        DateTime?
+  rejectedReason    String?
+  createdAt         DateTime          @default(now())
+
+  @@unique([serviceId, version])
+  @@index([serviceId, status])
+}
+
+/// Provider fees — a separate concept from platform fees, never merged.
+model ProviderFeeRule {
+  id                   String                 @id @default(uuid())
+  providerId           String
+  provider             Provider               @relation(fields: [providerId], references: [id])
+  operator             Operator
+  capability           ProviderCapabilityKind
+  version              Int
+  status               RuleStatus             @default(DRAFT)
+  feeType              FeeType
+  percentageBps        Int                    @default(0)
+  fixedFee             Int                    @default(0)
+  minFee               Int                    @default(0)
+  maxFee               Int?
+  source               ProviderFeeSource
+  evidenceReference    String?
+  deductedAtSettlement Boolean
+  changeReason         String
+  createdById          String
+  approvedById         String?
+  approvedAt           DateTime?
+  createdAt            DateTime               @default(now())
+
+  @@unique([providerId, operator, capability, version])
+}
+
+// ---------------------------------------------------------------- quotes and transactions
+
+/// Read-only once created. A quote never moves or reserves money.
+model Quote {
+  id                     String   @id @default(uuid())
+  customerId             String
+  customer               Customer @relation(fields: [customerId], references: [id])
+  serviceId              String
+  service                Service  @relation(fields: [serviceId], references: [id])
+  amount                 Int
+  customerPays           Int
+  platformFee            Int
+  providerFee            Int
+  expectedDelivered      Int
+  senderMsisdn           String
+  recipientMsisdn        String
+  /// Full QuoteBreakdown from @amico/pricing.
+  breakdown              Json
+  pricingRuleId          String
+  pricingRuleVersion     Int
+  providerFeeRuleId      String?
+  providerFeeRuleVersion Int?
+  isEstimate             Boolean
+  isSimulated            Boolean
+  createdAt              DateTime @default(now())
+  expiresAt              DateTime
+
+  transaction Transaction?
+}
+
+model Transaction {
+  id                      String           @id @default(uuid())
+  /// Human-friendly reference shown to customers and staff.
+  reference               String           @unique
+  customerId              String
+  customer                Customer         @relation(fields: [customerId], references: [id])
+  serviceId               String
+  service                 Service          @relation(fields: [serviceId], references: [id])
+  quoteId                 String           @unique
+  quote                   Quote            @relation(fields: [quoteId], references: [id])
+  state                   TransactionState
+  /// Optimistic concurrency counter, bumped on every transition.
+  version                 Int              @default(0)
+  idempotencyKey          String
+  /// Snapshot of the accepted quote terms. Later fee changes never alter it.
+  acceptedTerms           Json
+  amount                  Int
+  customerPays            Int
+  platformFee             Int
+  providerFee             Int
+  providerFeeCollectedBy  String
+  payoutInstructionAmount Int
+  expectedDelivered       Int
+  senderMsisdn            String
+  recipientMsisdn         String
+  receivingSimId          String?
+  riskLevel               RiskLevel        @default(LOW)
+  isSimulated             Boolean
+  createdAt               DateTime         @default(now())
+  updatedAt               DateTime         @updatedAt
+
+  history            TransactionStateHistory[]
+  manualVerification ManualVerification?
+  operations         ProviderOperation[]
+  journals           LedgerJournal[]
+  refunds            Refund[]
+
+  @@unique([customerId, idempotencyKey])
+  @@index([state])
+}
+
+/// Append-only (trigger-protected).
+model TransactionStateHistory {
+  id            String            @id @default(uuid())
+  transactionId String
+  transaction   Transaction       @relation(fields: [transactionId], references: [id])
+  fromState     TransactionState?
+  toState       TransactionState
+  actorType     ActorType
+  actorId       String?
+  reason        String?
+  metadata      Json?
+  createdAt     DateTime          @default(now())
+
+  @@index([transactionId, createdAt])
+}
+
+model EvidenceFile {
+  id         String   @id @default(uuid())
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id])
+  storageKey String   @unique
+  mimeType   String
+  sizeBytes  Int
+  sha256     String
+  createdAt  DateTime @default(now())
+}
+
+model ManualVerification {
+  id                   String             @id @default(uuid())
+  transactionId        String             @unique
+  transaction          Transaction        @relation(fields: [transactionId], references: [id])
+  status               VerificationStatus @default(AWAITING_CUSTOMER_REFERENCE)
+  expectedAmount       Int
+  receivingSimId       String
+  customerReference    String?
+  evidenceFileIds      String[]
+  submittedAt          DateTime?
+  requiresDualApproval Boolean
+  receivedAmount       Int?
+  evidenceNote         String?
+  reason               String?
+  firstReviewerId      String?
+  firstReviewedAt      DateTime?
+  secondApproverId     String?
+  secondApprovedAt     DateTime?
+  /// Bumped on every staff action; stale actions get 409.
+  version              Int                @default(0)
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@index([status])
+}
+
+// ---------------------------------------------------------------- provider operations
+
+model ProviderOperation {
+  id                String          @id @default(uuid())
+  transactionId     String
+  transaction       Transaction     @relation(fields: [transactionId], references: [id])
+  kind              OperationKind
+  operator          Operator
+  providerCode      String
+  /// One key = at most one movement at the provider.
+  idempotencyKey    String          @unique
+  /// Holds the transaction id while a payout is live (REQUESTED/PENDING/UNKNOWN/SUCCEEDED);
+  /// cleared only when the provider confirms FAILED. Unique => never two live payouts.
+  payoutSlot        String?         @unique
+  amount            Int
+  msisdn            String
+  status            OperationStatus @default(REQUESTED)
+  providerReference String?         @unique
+  failureReason     String?
+  statusChecks      Int             @default(0)
+  simulated         Boolean
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([transactionId])
+  @@index([status])
+}
+
+model ProviderCallback {
+  id                String    @id @default(uuid())
+  providerCode      String
+  /// Provider event id or (reference + status) — duplicates are dropped by this unique key.
+  dedupeKey         String    @unique
+  providerReference String?
+  payloadSha256     String
+  receivedAt        DateTime  @default(now())
+  processedAt       DateTime?
+}
+
+// ---------------------------------------------------------------- ledger (append-only)
+
+model LedgerAccount {
+  id      String            @id @default(uuid())
+  code    String
+  name    String
+  type    LedgerAccountType
+  book    LedgerBook
+  entries LedgerEntry[]
+
+  @@unique([code, book])
+}
+
+model LedgerJournal {
+  id            String        @id @default(uuid())
+  book          LedgerBook
+  kind          String
+  transactionId String?
+  transaction   Transaction?  @relation(fields: [transactionId], references: [id])
+  reversalOfId  String?       @unique
+  memo          String
+  createdById   String?
+  createdAt     DateTime      @default(now())
+  entries       LedgerEntry[]
+
+  @@index([transactionId])
+}
+
+model LedgerEntry {
+  id        String        @id @default(uuid())
+  journalId String
+  journal   LedgerJournal @relation(fields: [journalId], references: [id])
+  accountId String
+  account   LedgerAccount @relation(fields: [accountId], references: [id])
+  debit     Int           @default(0)
+  credit    Int           @default(0)
+  createdAt DateTime      @default(now())
+}
+
+// ---------------------------------------------------------------- refunds, notifications, audit, idempotency
+
+model Refund {
+  id            String       @id @default(uuid())
+  transactionId String
+  transaction   Transaction  @relation(fields: [transactionId], references: [id])
+  amount        Int
+  reason        String
+  status        RefundStatus @default(REQUESTED)
+  requestedById String
+  approvedById  String?
+  approvedAt    DateTime?
+  evidenceNote  String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+model Notification {
+  id            String    @id @default(uuid())
+  customerId    String
+  customer      Customer  @relation(fields: [customerId], references: [id])
+  transactionId String?
+  kind          String
+  title         String
+  body          String
+  readAt        DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([customerId, createdAt])
+}
+
+/// Append-only (trigger-protected).
+model AuditLog {
+  id         String    @id @default(uuid())
+  actorType  ActorType
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String?
+  before     Json?
+  after      Json?
+  ip         String?
+  createdAt  DateTime  @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model IdempotencyRecord {
+  id             String   @id @default(uuid())
+  /// scope:actor:key
+  key            String   @unique
+  requestSha256  String
+  responseStatus Int?
+  responseBody   Json?
+  createdAt      DateTime @default(now())
+}
