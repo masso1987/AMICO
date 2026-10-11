@@ -1,5 +1,5 @@
 import 'server-only';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 
 export const SESSION_COOKIE = 'amico_session';
 
@@ -43,12 +43,14 @@ export class ApiError extends Error {
 /** Server-side call to the API with the signed-in customer's token. */
 export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = await getToken();
+  const fwd = (await headers()).get('x-forwarded-for');
   const res = await fetch(apiUrl(path), {
     ...init,
     cache: 'no-store',
     headers: {
       'content-type': 'application/json',
       ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(fwd ? { 'x-forwarded-for': fwd } : {}),
       ...(init.headers ?? {}),
     },
   });

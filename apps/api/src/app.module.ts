@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { AmicoThrottlerGuard } from './common/throttler.guard';
 import { ConfigModule } from './config/config.module';
 import { PrismaModule } from './prisma/prisma.service';
 import { AuditModule } from './audit/audit.service';
@@ -41,7 +42,7 @@ import { HealthController } from './health/health.controller';
     CatalogueModule,
     SimsModule,
     // Rate limits apply everywhere except the automated test run (supertest shares one IP).
-    ThrottlerModule.forRoot({ throttlers: [{ ttl: 60_000, limit: 120 }], skipIf: () => process.env.NODE_ENV === 'test' }),
+    ThrottlerModule.forRoot({ throttlers: [{ ttl: 60_000, limit: 300 }], skipIf: () => process.env.NODE_ENV === 'test' }),
   ],
   controllers: [
     QuotesController,
@@ -57,7 +58,7 @@ import { HealthController } from './health/health.controller';
     HealthController,
   ],
   providers: [
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_GUARD, useClass: AmicoThrottlerGuard },
     TransactionStateService,
     QuotesService,
     TransactionsService,

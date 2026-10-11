@@ -7,7 +7,8 @@ export function configureApp(app: INestApplication): void {
   const env = loadEnv();
   app.enableShutdownHooks();
   app.getHttpAdapter().getInstance().disable('x-powered-by');
-  app.getHttpAdapter().getInstance().set('trust proxy', 1);
+  // The web apps (on loopback) forward Nginx's X-Forwarded-For; req.ip becomes the visitor's address.
+  app.getHttpAdapter().getInstance().set('trust proxy', 'loopback');
   app.enableCors({ origin: env.NODE_ENV === 'production' ? false : true, credentials: false });
 
   const doc = new DocumentBuilder()

@@ -10,7 +10,7 @@ import { DomainError } from '../common/errors';
 import { ZodPipe } from '../common/zod.pipe';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { AuthGuard, CurrentCustomer, CustomerAuth, type CustomerPrincipal } from './auth.guard';
+import { AuthGuard, CurrentCustomer, CurrentStaff, CustomerAuth, StaffAuth, type CustomerPrincipal, type StaffPrincipal } from './auth.guard';
 
 const Password = z.string().min(10, 'Use at least 10 characters').max(200);
 const RegisterSchema = z.object({ phone: Msisdn, fullName: z.string().trim().min(2).max(120), password: Password });
@@ -52,6 +52,10 @@ export class AuthService {
     return { id: c.id, phone: c.phone, fullName: c.fullName, phoneVerified: c.phoneVerifiedAt !== null, createdAt: c.createdAt };
   }
 
+  staffProfile(staffId: string) {
+    return this.prisma.staffUser.findUniqueOrThrow({ where: { id: staffId }, select: { id: true, email: true, fullName: true } });
+  }
+
   async loginStaff(input: z.infer<typeof StaffLoginSchema>, ip?: string) {
     const s = await this.prisma.staffUser.findUnique({ where: { email: input.email } });
     const ok = (await this.verify(s?.passwordHash, input.password)) && !!s?.active;
@@ -74,18 +78,22 @@ export class AuthService {
   }
 }
 
+/** Strict limit for credential endpoints only; profile endpoints use the normal per-user limit. */
+const LOGIN_LIMIT = Throttle({ default: { limit: 10, ttl: 60_000 } });
+
 @ApiTags('auth')
 @Controller('auth')
-@Throttle({ default: { limit: 10, ttl: 60_000 } })
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
 
   @Post('customer/register')
+  @LOGIN_LIMIT
   register(@Body(new ZodPipe(RegisterSchema)) body: z.infer<typeof RegisterSchema>) {
     return this.auth.registerCustomer(body);
   }
 
   @Post('customer/login')
+  @LOGIN_LIMIT
   @HttpCode(200)
   loginCustomer(@Body(new ZodPipe(CustomerLoginSchema)) body: z.infer<typeof CustomerLoginSchema>) {
     return this.auth.loginCustomer(body);
@@ -97,7 +105,16 @@ export class AuthController {
     return this.auth.me(c.id);
   }
 
+  /** Who is signed in to the admin dashboard, and what they may do. */
+  @Get('staff/me')
+  @StaffAuth()
+  async staffMe(@CurrentStaff() s: StaffPrincipal) {
+    const row = await this.auth.staffProfile(s.id);
+    return { ...row, roles: s.roles, permissions: [...s.permissions].sort() };
+  }
+
   @Post('staff/login')
+  @LOGIN_LIMIT
   @HttpCode(200)
   loginStaff(@Body(new ZodPipe(StaffLoginSchema)) body: z.infer<typeof StaffLoginSchema>) {
     return this.auth.loginStaff(body);
