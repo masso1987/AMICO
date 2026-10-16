@@ -142,3 +142,25 @@ describe('staff account management', () => {
     expect(s1.body.next).toBe('TOTP'); // the authenticator is kept
   });
 });
+
+describe('staff preferences', () => {
+  it('staff set their own language, phone and alert channels', async () => {
+    const acc = await createStaff(['SUPPORT']);
+    const { token } = await firstSignIn(acc);
+    const noPhone = await http(app).patch('/auth/staff/me').set(bearer(token)).send({ alertChannels: ['SMS'] }).expect(422);
+    expect(noPhone.body.code).toBe('PHONE_REQUIRED');
+    const r = await http(app).patch('/auth/staff/me').set(bearer(token)).send({ locale: 'fr', phone: '677123456', alertChannels: ['WHATSAPP', 'SMS'] }).expect(200);
+    expect(r.body).toEqual({ locale: 'fr', phone: '237677123456', alertChannels: ['WHATSAPP', 'SMS'] });
+    const me = await http(app).get('/auth/staff/me').set(bearer(token)).expect(200);
+    expect(me.body).toMatchObject({ locale: 'fr', phone: '237677123456' });
+    await http(app).patch('/auth/staff/me').set(bearer(token)).send({}).expect(400);
+  });
+
+  it('gateway settings come with form labels in both languages', async () => {
+    const r = await http(app).get('/admin/messaging/channels').set(admin).expect(200);
+    for (const c of r.body) for (const d of c.drivers) {
+      expect(d.fields.length).toBeGreaterThan(0);
+      for (const f of d.fields) expect(f.en && f.fr).toBeTruthy();
+    }
+  });
+});

@@ -12,7 +12,7 @@
   "dependencies": {
     "@amico/brand": "workspace:*",
     "@amico/contracts": "workspace:*",
-    "@fontsource-variable/manrope": "^5.3.0",
+    "@fontsource-variable/dm-sans": "^5.3.0",
     "@fontsource/cinzel": "^5.3.0",
     "next": "16.4.0",
     "react": "19.3.0",

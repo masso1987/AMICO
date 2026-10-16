@@ -1,13 +1,16 @@
 'use client';
 
+import { useI18n } from '@/i18n/client';
+
 export default function Error({ reset }: { error: Error; reset: () => void }) {
+  const { t } = useI18n();
   return (
     <main>
       <div className="wrap">
-        <h1 className="page-title">This page didn’t load</h1>
-        <p className="lede">AMICO may be briefly unreachable. Your exchanges are safe: nothing changes until you confirm.</p>
+        <h1 className="page-title">{t('error.title')}</h1>
+        <p className="lede">{t('error.body')}</p>
         <button className="btn btn-primary" onClick={reset}>
-          Try again
+          {t('error.retry')}
         </button>
       </div>
     </main>

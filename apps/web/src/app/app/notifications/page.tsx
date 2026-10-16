@@ -1,53 +1,52 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
-import { ApiError, apiFetch } from '@/lib/session';
+import { getT } from '@/i18n/server';
 import { dateTime } from '@/lib/format';
+import { authed } from '@/lib/me';
 
-export const metadata: Metadata = { title: 'Messages' };
+export async function generateMetadata(): Promise<Metadata> {
+  const { t } = await getT();
+  return { title: t('nav.messages') };
+}
 
 interface Note {
   id: string;
-  transactionId: string | null;
   title: string;
   body: string;
+  transactionId: string | null;
   createdAt: string;
 }
 
 export default async function Notifications() {
-  let notes: Note[];
-  try {
-    notes = await apiFetch<Note[]>('/notifications');
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 401) redirect('/login?next=/app/notifications');
-    throw e;
-  }
+  const { t, locale } = await getT();
+  const items = await authed<Note[]>('/notifications', '/app/notifications');
   return (
     <>
-      <h1 className="page-title">Messages</h1>
-      {notes.length === 0 ? (
-        <p className="lede">Updates about your exchanges will appear here.</p>
+      <h1 className="page-title">{t('messages.title')}</h1>
+      <p className="lede">{t('messages.lede')}</p>
+      {items.length ? (
+        <div className="panel" style={{ paddingTop: 6, paddingBottom: 6 }}>
+          <ul className="list">
+            {items.map((n) => (
+              <li key={n.id} style={{ padding: '14px 0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'baseline' }}>
+                  <strong>{n.title}</strong>
+                  <span className="muted" style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
+                    {dateTime(n.createdAt, locale)}
+                  </span>
+                </div>
+                <p style={{ color: 'var(--ink-2)', marginTop: 4 }}>{n.body}</p>
+                {n.transactionId && (
+                  <Link href={`/app/transactions/${n.transactionId}`} style={{ fontSize: 14 }}>
+                    {t('messages.open')}
+                  </Link>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : (
-        <ul className="routes" style={{ maxWidth: 720 }}>
-          {notes.map((n) => (
-            <li key={n.id} style={{ padding: '16px 4px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
-                <strong>{n.title}</strong>
-                <span className="muted" style={{ fontSize: 13, whiteSpace: 'nowrap' }}>
-                  {dateTime(n.createdAt)}
-                </span>
-              </div>
-              <p style={{ margin: '4px 0 0' }} className="muted">
-                {n.body}
-              </p>
-              {n.transactionId && (
-                <Link href={`/app/transactions/${n.transactionId}`} style={{ fontSize: 14 }}>
-                  View exchange
-                </Link>
-              )}
-            </li>
-          ))}
-        </ul>
+        <div className="empty">{t('messages.none')}</div>
       )}
     </>
   );

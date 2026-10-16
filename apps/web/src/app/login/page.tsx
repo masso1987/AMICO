@@ -1,23 +1,22 @@
-import { Suspense } from 'react';
 import type { Metadata } from 'next';
-import { Brand } from '@/components/Brand';
 import { AuthForm } from '@/components/AuthForm';
+import { PublicHeader } from '@/components/PublicHeader';
+import { getT } from '@/i18n/server';
 
-export const metadata: Metadata = { title: 'Sign in' };
+export async function generateMetadata(): Promise<Metadata> {
+  const { t } = await getT();
+  return { title: t('auth.signIn') };
+}
 
-export default function Page() {
+export default async function Page(props: PageProps<'/login'>) {
+  const sp = await props.searchParams;
+  const next = typeof sp.next === 'string' ? sp.next : undefined;
   return (
     <>
-      <header className="topbar">
-        <div className="wrap">
-          <Brand />
-        </div>
-      </header>
+      <PublicHeader />
       <main>
         <div className="wrap">
-          <Suspense>
-            <AuthForm mode="login" />
-          </Suspense>
+          <AuthForm mode="login" next={next} />
         </div>
       </main>
     </>

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Inject, Injectable, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Inject, Injectable, Patch, Post, Req } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -6,6 +6,7 @@ import * as argon2 from 'argon2';
 import type { Request } from 'express';
 import { randomInt } from 'node:crypto';
 import { z } from 'zod';
+import { Msisdn } from '@amico/contracts';
 import { ENV, type Env } from '../config/env';
 import { DomainError } from '../common/errors';
 import { decrypt, encrypt } from '../common/crypto';
@@ -38,6 +39,13 @@ export const StaffPassword = z
 const LoginSchema = z.object({ email: z.string().trim().email().toLowerCase(), password: z.string().min(1).max(200) });
 const TotpSchema = z.object({ challenge: z.string().min(10).max(2000), code: z.string().trim().regex(/^\d{6}$/, 'Enter the 6-digit code') });
 const NewPasswordSchema = z.object({ challenge: z.string().min(10).max(2000), newPassword: StaffPassword });
+const PreferencesSchema = z
+  .object({
+    locale: z.enum(['en', 'fr']).optional(),
+    phone: Msisdn.nullable().optional(),
+    alertChannels: z.array(z.enum(['SMS', 'WHATSAPP'])).max(2).transform((c) => [...new Set(c)]).optional(),
+  })
+  .refine((b) => b.locale !== undefined || b.phone !== undefined || b.alertChannels !== undefined, 'Nothing to change');
 const ChangePasswordSchema = z.object({ currentPassword: z.string().min(1).max(200), newPassword: StaffPassword });
 
 type Stage = 'totp' | 'enroll' | 'password';
@@ -148,8 +156,23 @@ export class StaffAuthService {
   profile(staffId: string) {
     return this.prisma.staffUser.findUniqueOrThrow({
       where: { id: staffId },
-      select: { id: true, email: true, fullName: true, totpEnabledAt: true, lastLoginAt: true, createdAt: true },
+      select: { id: true, email: true, fullName: true, totpEnabledAt: true, lastLoginAt: true, createdAt: true, locale: true, phone: true, alertChannels: true },
     });
+  }
+
+  /** A staff member's own preferences: dashboard language and where to receive alerts. */
+  async updatePreferences(staffId: string, input: z.infer<typeof PreferencesSchema>, ip?: string) {
+    const before = await this.prisma.staffUser.findUniqueOrThrow({ where: { id: staffId }, select: { locale: true, phone: true, alertChannels: true } });
+    const phone = input.phone !== undefined ? input.phone : before.phone;
+    const alertChannels = input.alertChannels ?? before.alertChannels;
+    if (alertChannels.length && !phone) throw new DomainError('PHONE_REQUIRED', 'Add a phone number to receive alerts by SMS or WhatsApp');
+    const after = await this.prisma.staffUser.update({
+      where: { id: staffId },
+      data: { locale: input.locale ?? before.locale, phone, alertChannels },
+      select: { locale: true, phone: true, alertChannels: true },
+    });
+    await this.audit.record({ actorType: 'STAFF', actorId: staffId, action: 'staff.preferences', entityType: 'StaffUser', entityId: staffId, before, after, ip });
+    return after;
   }
 
   // ------------------------------------------------------------------ internals
@@ -235,6 +258,12 @@ export class StaffAuthController {
   async me(@CurrentStaff() s: StaffPrincipal) {
     const { totpEnabledAt, ...row } = await this.auth.profile(s.id);
     return { ...row, twoFactorEnabled: totpEnabledAt !== null, twoFactorSince: totpEnabledAt, roles: s.roles, permissions: [...s.permissions].sort() };
+  }
+
+  @Patch('me')
+  @StaffAuth()
+  preferences(@CurrentStaff() s: StaffPrincipal, @Body(new ZodPipe(PreferencesSchema)) body: z.infer<typeof PreferencesSchema>, @Req() req: Request) {
+    return this.auth.updatePreferences(s.id, body, req.ip);
   }
 
   @Post('password')

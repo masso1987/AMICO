@@ -1,83 +1,58 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
-import { ApiError, apiFetch } from '@/lib/session';
-import { dateTime, fcfa, STATE_COPY } from '@/lib/format';
+import { TxnRow, type TxnSummary } from '@/components/TxnRow';
+import { getT } from '@/i18n/server';
+import { authed } from '@/lib/me';
 
-export const metadata: Metadata = { title: 'History' };
-
-interface Page {
-  page: number;
-  pageSize: number;
-  total: number;
-  items: { id: string; reference: string; service: { name: string }; state: string; customerPays: number; expectedDelivered: number; simulated: boolean; createdAt: string }[];
+export async function generateMetadata(): Promise<Metadata> {
+  const { t } = await getT();
+  return { title: t('nav.history') };
 }
 
-export default async function History(props: PageProps<'/app/history'>) {
-  const sp = await props.searchParams;
-  const page = Math.max(1, Number(sp.page ?? 1) || 1);
-  let data: Page;
-  try {
-    data = await apiFetch<Page>(`/transactions?page=${page}&pageSize=20`);
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 401) redirect('/login?next=/app/history');
-    throw e;
-  }
-  const pages = Math.max(1, Math.ceil(data.total / data.pageSize));
+const PAGE_SIZE = 20;
 
+export default async function History(props: PageProps<'/app/history'>) {
+  const { t } = await getT();
+  const sp = await props.searchParams;
+  const page = Math.max(1, Number.parseInt(typeof sp.page === 'string' ? sp.page : '1', 10) || 1);
+  const data = await authed<{ items: TxnSummary[]; total: number }>(`/transactions?page=${page}&pageSize=${PAGE_SIZE}`, '/app/history');
+  const pages = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
   return (
     <>
-      <h1 className="page-title">History</h1>
-      {data.items.length === 0 ? (
-        <>
-          <p className="lede">You haven’t made an exchange yet.</p>
-          <Link className="btn btn-primary" href="/app">
-            Start an exchange
-          </Link>
-        </>
+      <h1 className="page-title">{t('history.title')}</h1>
+      <p className="lede">{t('history.lede')}</p>
+      {data.items.length ? (
+        <div className="panel" style={{ paddingTop: 6, paddingBottom: 6 }}>
+          <ul className="list">
+            {data.items.map((x) => (
+              <li key={x.id}>
+                <TxnRow txn={x} />
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : (
-        <>
-          <p className="lede">{data.total} exchanges. Select one to see its progress or receipt.</p>
-          <table className="history">
-            <thead>
-              <tr>
-                <th>Exchange</th>
-                <th className="hide-sm">Date</th>
-                <th>Status</th>
-                <th className="num">Received</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.items.map((t) => {
-                const c = STATE_COPY[t.state] ?? { title: t.state, tone: 'wait' };
-                return (
-                  <tr key={t.id}>
-                    <td>
-                      <Link href={`/app/transactions/${t.id}`}>{t.service.name}</Link>
-                      <div className="muted" style={{ fontSize: 13 }}>
-                        {t.reference} {t.simulated && <span className="sim-tag">Simulation</span>}
-                      </div>
-                    </td>
-                    <td className="hide-sm muted">{dateTime(t.createdAt)}</td>
-                    <td>
-                      <span className={`pill tone-${c.tone}`}>{c.title}</span>
-                    </td>
-                    <td className="num money">{fcfa(t.expectedDelivered)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {pages > 1 && (
-            <nav style={{ display: 'flex', gap: 12, marginTop: 20 }} aria-label="Pages">
-              {page > 1 && <Link href={`/app/history?page=${page - 1}`}>Newer</Link>}
-              <span className="muted">
-                Page {page} of {pages}
-              </span>
-              {page < pages && <Link href={`/app/history?page=${page + 1}`}>Older</Link>}
-            </nav>
+        <div className="empty">
+          {t('home.noneYet')}{' '}
+          <Link href="/app">{t('history.start')}</Link>
+        </div>
+      )}
+      {pages > 1 && (
+        <nav className="chips" aria-label={t('history.pages')} style={{ marginTop: 18 }}>
+          {page > 1 && (
+            <Link className="chip" href={`/app/history?page=${page - 1}`}>
+              ← {t('history.newer')}
+            </Link>
           )}
-        </>
+          <span className="chip" aria-current="true">
+            {t('history.pageOf', { page, pages })}
+          </span>
+          {page < pages && (
+            <Link className="chip" href={`/app/history?page=${page + 1}`}>
+              {t('history.older')} →
+            </Link>
+          )}
+        </nav>
       )}
     </>
   );

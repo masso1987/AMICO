@@ -21,9 +21,14 @@ const ALL_KEYS: CapabilityKey[] = (['MTN', 'ORANGE'] as Operator[]).flatMap((ope
  * adapter loads; real adapters are added here once G0/G2 verification is complete.
  * The registry itself refuses simulated adapters in production.
  */
-export function buildRegistry(env: Env): ProviderRegistry {
+export function buildRegistry(env: Env, prisma?: PrismaService): ProviderRegistry {
   const registry = new ProviderRegistry(env.NODE_ENV);
-  if (env.SIMULATION_MODE) registry.register(new MockProviderAdapter(), ALL_KEYS);
+  if (env.SIMULATION_MODE) {
+    const recall = prisma
+      ? async (idempotencyKey: string) => (await prisma.providerOperation.findUnique({ where: { idempotencyKey }, select: { amount: true } }))?.amount ?? null
+      : undefined;
+    registry.register(new MockProviderAdapter({ recall }), ALL_KEYS);
+  }
   // Real adapters (MTN MoMo Open API, Orange Money, aggregator) register here, never alongside the mock.
   return registry;
 }
@@ -117,7 +122,7 @@ export class ProvidersAdminController {
 @Global()
 @Module({
   controllers: [ProvidersAdminController],
-  providers: [{ provide: PROVIDER_REGISTRY, inject: [ENV], useFactory: buildRegistry }, CapabilityService],
+  providers: [{ provide: PROVIDER_REGISTRY, inject: [ENV, PrismaService], useFactory: buildRegistry }, CapabilityService],
   exports: [PROVIDER_REGISTRY, CapabilityService],
 })
 export class ProvidersModule {}

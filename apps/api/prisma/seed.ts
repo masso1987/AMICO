@@ -154,14 +154,20 @@ async function seedDemo(providerId: string, staff: Record<string, string>) {
     if (!exists) {
       const airtime = service.sourceAsset.endsWith('_AIRTIME');
       await prisma.pricingRule.create({
-        data: {
-          serviceId: service.id, version: 1, status: 'ACTIVE', feeType: 'PERCENTAGE_PLUS_FIXED',
-          percentageBps: 100, fixedFee: 50, minFee: 100, maxFee: 2_000, minAmount: 500, maxAmount: 500_000,
-          deductionMethod: 'DEDUCT_FROM_DESTINATION',
-          // DEMO value only — a real airtime conversion rate must be verified (assumption B6).
-          conversionRatePpm: airtime ? 850_000 : 1_000_000,
-          effectiveFrom: now, changeReason: 'Demo seed (simulation)', createdById: maker, approvedById: checker, approvedAt: now,
-        },
+        data: airtime
+          ? {
+              // Sell credit: the same buy-back rule as every other sell-credit route (one rate, 1 000–500 000 FCFA, no fee).
+              // DEMO rate only — the real rate is set and approved in the admin (assumption B6).
+              serviceId: service.id, version: 1, status: 'ACTIVE', feeType: 'FIXED', fixedFee: 0, minFee: 0,
+              minAmount: 1_000, maxAmount: 500_000, deductionMethod: 'DEDUCT_FROM_DESTINATION', conversionRatePpm: DEMO_SELL_RATE_PPM,
+              effectiveFrom: now, changeReason: 'Demo seed (simulation): demo buy-back rate for selling credit', createdById: maker, approvedById: checker, approvedAt: now,
+            }
+          : {
+              serviceId: service.id, version: 1, status: 'ACTIVE', feeType: 'PERCENTAGE_PLUS_FIXED',
+              percentageBps: 100, fixedFee: 50, minFee: 100, maxFee: 2_000, minAmount: 500, maxAmount: 500_000,
+              deductionMethod: 'DEDUCT_FROM_DESTINATION', conversionRatePpm: 1_000_000,
+              effectiveFrom: now, changeReason: 'Demo seed (simulation)', createdById: maker, approvedById: checker, approvedAt: now,
+            },
       });
     }
     await prisma.service.update({ where: { id: service.id }, data: { status: 'ENABLED' } });

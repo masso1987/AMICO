@@ -32,9 +32,22 @@ export interface DriverContext {
   cacheKey: string;
 }
 
+/** How the admin form shows one non-secret setting (the schema still validates it). */
+export interface FieldSpec {
+  key: string;
+  en: string;
+  fr: string;
+  hintEn?: string;
+  hintFr?: string;
+  kind: 'text' | 'select' | 'textarea';
+  options?: string[];
+}
+
 export interface Driver {
   readonly kind: string;
   readonly label: string;
+  /** Form layout for the admin (labels in English and French). */
+  readonly fields: readonly FieldSpec[];
   /** Validates non-secret settings. */
   readonly settingsSchema: z.ZodTypeAny;
   /** Names of the secret fields (write-only in the admin). */
@@ -93,6 +106,12 @@ const OrangeSettings = z.object({
 export const orangeSmsApi: Driver = {
   kind: 'ORANGE_SMS_API',
   label: 'Orange SMS API (developer.orange.com)',
+  fields: [
+    { key: 'senderAddress', en: 'Sender number', fr: 'Numéro expéditeur', hintEn: 'Without tel:+ (Cameroon default 2370000)', hintFr: 'Sans tel:+ (par défaut au Cameroun : 2370000)', kind: 'text' },
+    { key: 'senderName', en: 'Sender name', fr: 'Nom expéditeur', hintEn: 'Approved by Orange, e.g. AMICO. Leave empty for your account default.', hintFr: 'Validé par Orange, ex. AMICO. Vide = valeur par défaut du compte.', kind: 'text' },
+    { key: 'tokenUrl', en: 'Token URL', fr: 'URL du jeton', kind: 'text' },
+    { key: 'apiBase', en: 'API base URL', fr: 'URL de base de l’API', kind: 'text' },
+  ],
   settingsSchema: OrangeSettings,
   secretFields: ['clientId', 'clientSecret'],
   async send(to, text, ctx) {
@@ -136,6 +155,12 @@ const MtnSettings = z.object({
 export const mtnSmsV3: Driver = {
   kind: 'MTN_SMS_V3',
   label: 'MTN SMS V3 (developers.mtn.com)',
+  fields: [
+    { key: 'senderAddress', en: 'Sender ID', fr: 'Identifiant expéditeur', hintEn: 'Short code or approved name, e.g. AMICO', hintFr: 'Code court ou nom validé, ex. AMICO', kind: 'text' },
+    { key: 'serviceCode', en: 'Service code', fr: 'Code de service', hintEn: 'From your MTN bulk SMS subscription, if any', hintFr: 'Fourni avec votre abonnement SMS MTN, le cas échéant', kind: 'text' },
+    { key: 'tokenUrl', en: 'Token URL', fr: 'URL du jeton', kind: 'text' },
+    { key: 'sendUrl', en: 'Send URL', fr: 'URL d’envoi', kind: 'text' },
+  ],
   settingsSchema: MtnSettings,
   secretFields: ['clientId', 'clientSecret'],
   async send(to, text, ctx) {
@@ -184,6 +209,14 @@ function fill(template: string, values: Record<string, string>, escape: (v: stri
 export const httpGateway: Driver = {
   kind: 'HTTP_GATEWAY',
   label: 'SMS aggregator (HTTPS API)',
+  fields: [
+    { key: 'url', en: 'Gateway URL', fr: 'URL de la passerelle', hintEn: 'https:// address from your aggregator', hintFr: 'Adresse https:// fournie par votre agrégateur', kind: 'text' },
+    { key: 'method', en: 'Method', fr: 'Méthode', kind: 'select', options: ['POST', 'GET'] },
+    { key: 'format', en: 'Body format', fr: 'Format du corps', kind: 'select', options: ['json', 'form'] },
+    { key: 'template', en: 'Body template', fr: 'Modèle du corps', hintEn: 'Use {{to}}, {{message}} and {{sender}}', hintFr: 'Utilisez {{to}}, {{message}} et {{sender}}', kind: 'textarea' },
+    { key: 'sender', en: 'Sender', fr: 'Expéditeur', kind: 'text' },
+    { key: 'authHeader', en: 'Auth header name', fr: 'Nom de l’en-tête d’authentification', hintEn: 'e.g. Authorization or X-API-Key', hintFr: 'ex. Authorization ou X-API-Key', kind: 'text' },
+  ],
   settingsSchema: HttpSettings,
   secretFields: ['authValue'],
   async send(to, text, ctx) {
@@ -231,6 +264,14 @@ export function whatsappSafe(text: string): string {
 export const whatsappCloud: Driver = {
   kind: 'WHATSAPP_CLOUD',
   label: 'WhatsApp Cloud API (Meta)',
+  fields: [
+    { key: 'phoneNumberId', en: 'Phone number ID', fr: 'ID du numéro', hintEn: 'From WhatsApp Manager (not the phone number itself)', hintFr: 'Dans WhatsApp Manager (pas le numéro lui-même)', kind: 'text' },
+    { key: 'templateName', en: 'Template name', fr: 'Nom du modèle', hintEn: 'An approved UTILITY template whose body is just {{1}}', hintFr: 'Un modèle UTILITY approuvé dont le corps est seulement {{1}}', kind: 'text' },
+    { key: 'templateLanguageEn', en: 'Template language (English)', fr: 'Langue du modèle (anglais)', kind: 'text' },
+    { key: 'templateLanguageFr', en: 'Template language (French)', fr: 'Langue du modèle (français)', kind: 'text' },
+    { key: 'apiVersion', en: 'Graph API version', fr: 'Version de l’API Graph', kind: 'text' },
+    { key: 'apiBase', en: 'API base URL', fr: 'URL de base de l’API', kind: 'text' },
+  ],
   settingsSchema: WhatsAppSettings,
   secretFields: ['accessToken'],
   async send(to, text, ctx) {

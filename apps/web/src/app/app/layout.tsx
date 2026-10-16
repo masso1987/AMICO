@@ -1,15 +1,9 @@
-import { Brand } from '@/components/Brand';
-import { AppNav } from '@/components/AppNav';
+import { AppHeader } from '@/components/AppHeader';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
-      <header className="topbar">
-        <div className="wrap">
-          <Brand href="/app" />
-          <AppNav />
-        </div>
-      </header>
+      <AppHeader />
       <main>
         <div className="wrap">{children}</div>
       </main>

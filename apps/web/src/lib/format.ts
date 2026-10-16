@@ -1,65 +1,100 @@
 /** Display helpers. They only format numbers the API computed; no money maths happens here. */
+import { ASSET_META, type Asset } from '@amico/contracts';
+import type { Locale } from '@/i18n/core';
 
-const nf = new Intl.NumberFormat('fr-CM', { maximumFractionDigits: 0 });
+const nf = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 0 });
 
+/** 5000 → "5 000 FCFA" (Cameroon groups thousands with spaces in both languages). */
 export function fcfa(amount: number): string {
   return `${nf.format(amount)} FCFA`;
 }
 
+export function num(n: number): string {
+  return nf.format(n);
+}
+
 /** 237699112233 → 6 99 11 22 33 */
 export function phone(msisdn: string): string {
-  const local = msisdn.startsWith('237') ? msisdn.slice(3) : msisdn;
+  const local = msisdn.replace(/^\+?237/, '');
   return local.replace(/^(\d)(\d{2})(\d{2})(\d{2})(\d{2})$/, '$1 $2 $3 $4 $5');
 }
 
-export function dateTime(iso: string): string {
-  return new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
+/** What the customer typed → 237XXXXXXXXX (the API validates it). */
+export function toMsisdn(input: string): string {
+  const d = input.replace(/\D/g, '');
+  if (d.length === 9) return `237${d}`;
+  if (d.length === 12 && d.startsWith('237')) return d;
+  if (d.length === 14 && d.startsWith('00237')) return d.slice(2);
+  return d;
+}
+
+export function localNumber(msisdn: string): string {
+  return msisdn.replace(/^\+?237/, '');
+}
+
+export function dateTime(iso: string | Date, locale: Locale): string {
+  return new Intl.DateTimeFormat(locale === 'fr' ? 'fr-FR' : 'en-GB', {
+    timeZone: 'Africa/Douala',
+    day: 'numeric',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(iso));
+}
+
+export function dateOnly(iso: string | Date, locale: Locale): string {
+  return new Intl.DateTimeFormat(locale === 'fr' ? 'fr-FR' : 'en-GB', { timeZone: 'Africa/Douala', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(iso));
 }
 
 export type Operator = 'MTN' | 'ORANGE';
 
-export const ASSETS: Record<string, { operator: Operator; kind: 'money' | 'airtime' | 'data'; label: string; short: string }> = {
-  MTN_MOMO: { operator: 'MTN', kind: 'money', label: 'MTN Mobile Money', short: 'MoMo' },
-  ORANGE_MONEY: { operator: 'ORANGE', kind: 'money', label: 'Orange Money', short: 'Orange Money' },
-  MTN_AIRTIME: { operator: 'MTN', kind: 'airtime', label: 'MTN airtime', short: 'MTN airtime' },
-  ORANGE_AIRTIME: { operator: 'ORANGE', kind: 'airtime', label: 'Orange airtime', short: 'Orange airtime' },
-  MTN_DATA: { operator: 'MTN', kind: 'data', label: 'MTN data bundle', short: 'MTN data' },
-  ORANGE_DATA: { operator: 'ORANGE', kind: 'data', label: 'Orange data bundle', short: 'Orange data' },
-};
+export function operatorOf(asset: string): Operator {
+  return ASSET_META[asset as Asset]?.operator === 'ORANGE' ? 'ORANGE' : 'MTN';
+}
 
-/** What each transaction state means to the customer, in plain words. */
-export const STATE_COPY: Record<string, { title: string; tone: 'wait' | 'action' | 'good' | 'bad' | 'review' }> = {
-  CREATED: { title: 'Starting', tone: 'wait' },
-  QUOTE_PENDING_CONFIRMATION: { title: 'Waiting for your confirmation', tone: 'action' },
-  AWAITING_SOURCE_PAYMENT: { title: 'Waiting for your payment', tone: 'action' },
-  PAYMENT_PROCESSING: { title: 'Confirming your payment', tone: 'wait' },
-  AWAITING_MANUAL_VERIFICATION: { title: 'Checking your airtime transfer', tone: 'wait' },
-  SOURCE_VERIFIED: { title: 'Payment received', tone: 'wait' },
-  PAYOUT_PROCESSING: { title: 'Sending to the recipient', tone: 'wait' },
-  DELIVERY_PENDING: { title: 'Confirming delivery', tone: 'wait' },
-  COMPLETED: { title: 'Delivered', tone: 'good' },
-  REJECTED: { title: 'Not completed', tone: 'bad' },
-  FAILED: { title: 'Delivery failed', tone: 'bad' },
-  REFUND_PENDING: { title: 'Refund in progress', tone: 'review' },
-  REFUNDED: { title: 'Refunded', tone: 'good' },
-  UNDER_REVIEW: { title: 'Being reviewed by our team', tone: 'review' },
-};
+export type AssetKind = 'money' | 'airtime' | 'data';
 
-/** Past-tense labels for the progress list: what happened at each step. */
-export const HISTORY_COPY: Record<string, string> = {
-  QUOTE_PENDING_CONFIRMATION: 'Quote accepted',
-  AWAITING_SOURCE_PAYMENT: 'Payment requested',
-  PAYMENT_PROCESSING: 'Payment prompt sent to your phone',
-  AWAITING_MANUAL_VERIFICATION: 'Transfer reference received',
-  SOURCE_VERIFIED: 'Payment confirmed',
-  PAYOUT_PROCESSING: 'Sending started',
-  DELIVERY_PENDING: 'Operator accepted the transfer',
-  COMPLETED: 'Delivered to the recipient',
-  REJECTED: 'Stopped',
-  FAILED: 'Delivery failed',
-  REFUND_PENDING: 'Refund started',
-  REFUNDED: 'Refunded',
-  UNDER_REVIEW: 'Sent to our team for review',
-};
+export function kindOf(asset: string): AssetKind {
+  const k = ASSET_META[asset as Asset]?.kind;
+  return k === 'MOBILE_MONEY' ? 'money' : k === 'AIRTIME' ? 'airtime' : 'data';
+}
 
+/** 2048 → "2 GB", 500 → "500 MB" */
+export function dataSize(mb: number, locale: Locale): string {
+  const unit = locale === 'fr' ? ['Mo', 'Go'] : ['MB', 'GB'];
+  if (mb >= 1024) {
+    const gb = mb / 1024;
+    return `${Number.isInteger(gb) ? gb : gb.toFixed(1).replace('.', locale === 'fr' ? ',' : '.')} ${unit[1]}`;
+  }
+  return `${mb} ${unit[0]}`;
+}
+
+/** Transaction states where nothing more will happen. */
 export const TERMINAL = ['COMPLETED', 'REJECTED', 'REFUNDED'];
+
+export type Tone = 'wait' | 'action' | 'good' | 'bad' | 'review';
+
+export const STATE_TONE: Record<string, Tone> = {
+  CREATED: 'wait',
+  QUOTE_PENDING_CONFIRMATION: 'action',
+  AWAITING_SOURCE_PAYMENT: 'action',
+  PAYMENT_PROCESSING: 'wait',
+  AWAITING_MANUAL_VERIFICATION: 'wait',
+  SOURCE_VERIFIED: 'wait',
+  PAYOUT_PROCESSING: 'wait',
+  DELIVERY_PENDING: 'wait',
+  COMPLETED: 'good',
+  REJECTED: 'bad',
+  FAILED: 'bad',
+  REFUND_PENDING: 'review',
+  REFUNDED: 'good',
+  UNDER_REVIEW: 'review',
+};
+
+/** Which of the three steps (pay, check, deliver) a state has reached. */
+export function stepOf(state: string): number {
+  if (['AWAITING_SOURCE_PAYMENT', 'CREATED', 'QUOTE_PENDING_CONFIRMATION'].includes(state)) return 1;
+  if (['PAYMENT_PROCESSING', 'AWAITING_MANUAL_VERIFICATION', 'UNDER_REVIEW'].includes(state)) return 2;
+  if (['SOURCE_VERIFIED', 'PAYOUT_PROCESSING', 'DELIVERY_PENDING', 'FAILED', 'REFUND_PENDING'].includes(state)) return 3;
+  return 4;
+}

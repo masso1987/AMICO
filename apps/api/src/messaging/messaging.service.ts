@@ -193,7 +193,7 @@ export class MessagingService {
         enabled: r?.enabled ?? false,
         live: r?.live ?? false,
         driver: driverKind,
-        drivers: CHANNEL_DRIVERS[channel].map((k) => ({ kind: k, label: DRIVERS[k]!.label, secretFields: DRIVERS[k]!.secretFields })),
+        drivers: CHANNEL_DRIVERS[channel].map((k) => ({ kind: k, label: DRIVERS[k]!.label, secretFields: DRIVERS[k]!.secretFields, fields: DRIVERS[k]!.fields })),
         settings: r?.settings ?? {},
         secretsSet: Object.fromEntries(DRIVERS[driverKind]!.secretFields.map((f) => [f, Boolean(secrets[f])])),
         lastTestAt: r?.lastTestAt ?? null,

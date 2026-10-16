@@ -1,40 +1,35 @@
 import type { Metadata, Viewport } from 'next';
 import '@fontsource/cinzel/600.css';
-import '@fontsource-variable/manrope';
+import '@fontsource/cinzel/700.css';
+import '@fontsource-variable/dm-sans';
 import './globals.css';
-import { apiUrl } from '@/lib/session';
+import { Banners } from '@/components/Banners';
+import { Footer } from '@/components/Footer';
+import { I18nProvider } from '@/i18n/client';
+import { getT } from '@/i18n/server';
+import { getStatus, simulationMode } from '@/lib/data';
 
-export const metadata: Metadata = {
-  title: { default: 'AMICO — MTN and Orange exchange', template: '%s · AMICO' },
-  description: 'Move money and airtime between MTN and Orange in Cameroon.',
-};
-
-export const viewport: Viewport = { themeColor: '#0e1424', width: 'device-width', initialScale: 1 };
-
-async function simulationMode(): Promise<boolean> {
-  try {
-    const res = await fetch(apiUrl('/health'), { cache: 'no-store', signal: AbortSignal.timeout(2000) });
-    const body = await res.json();
-    return body.simulationMode !== false;
-  } catch {
-    return true; // if we can't tell, say so: never imply money is real
-  }
+export async function generateMetadata(): Promise<Metadata> {
+  const { t } = await getT();
+  return {
+    title: { default: t('meta.title'), template: '%s · AMICO' },
+    description: t('meta.description'),
+  };
 }
 
+export const viewport: Viewport = { themeColor: '#0e1116', width: 'device-width', initialScale: 1 };
+
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
-  const sim = await simulationMode();
+  const { locale } = await getT();
+  const [status, sim] = await Promise.all([getStatus(), simulationMode()]);
   return (
-    <html lang="en">
+    <html lang={locale}>
       <body>
-        {sim && (
-          <div className="sim-banner" role="status">
-            Simulation mode — no real money or airtime moves on this site.
-          </div>
-        )}
-        {children}
-        <footer className="footer">
-          <div className="wrap">AMICO Cameroon, Alpha Multi-Integrated Corporation</div>
-        </footer>
+        <I18nProvider locale={locale}>
+          <Banners status={status} simulation={sim} />
+          {children}
+          <Footer />
+        </I18nProvider>
       </body>
     </html>
   );

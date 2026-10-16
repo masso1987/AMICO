@@ -144,8 +144,34 @@ export class PricingAdminController {
   }
 }
 
+/** Public: the buy-back rate customers see on the "sell credit" page, per enabled network route. */
+@ApiTags('status')
+@Controller('public')
+export class PublicPricingController {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly pricing: PricingService,
+  ) {}
+
+  @Get('sell-credit')
+  async sellCredit() {
+    const services = await this.prisma.service.findMany({
+      where: { code: { in: routesInGroup('SELL_CREDIT') }, status: 'ENABLED' },
+      select: { id: true, code: true, sourceAsset: true, destinationAsset: true },
+      orderBy: { code: 'asc' },
+    });
+    const out = [];
+    for (const svc of services) {
+      const rule = await this.pricing.activeRule(svc.id);
+      if (!rule) continue;
+      out.push({ serviceCode: svc.code, sourceAsset: svc.sourceAsset, destinationAsset: svc.destinationAsset, ratePercent: rule.conversionRatePpm / 10_000, minAmount: rule.minAmount, maxAmount: rule.maxAmount });
+    }
+    return out;
+  }
+}
+
 @Module({
-  controllers: [PricingAdminController],
+  controllers: [PricingAdminController, PublicPricingController],
   providers: [PricingService],
   exports: [PricingService],
 })

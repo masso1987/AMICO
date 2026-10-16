@@ -51,3 +51,14 @@ describe('registry', () => {
     expect(() => r.resolve({ operator: 'ORANGE', capability: 'DISBURSE' })).toThrow(CapabilityNotSupportedError);
   });
 });
+
+describe('mock adapter across processes', () => {
+  it('answers a status query for an operation another instance performed, using the recalled amount', async () => {
+    const a = new MockProviderAdapter();
+    const b = new MockProviderAdapter({ recall: async (key) => (key === 'k1' ? 5000 : key === 'k2' ? 5013 : null) });
+    await a.collect({ idempotencyKey: 'k1', operator: 'MTN', msisdn: '237670000000', amount: 5000, narrative: 't' });
+    expect((await b.queryStatus('k1')).status).toBe('SUCCEEDED');
+    expect((await b.queryStatus('k2')).status).toBe('FAILED');
+    expect((await b.queryStatus('unknown')).failureReason).toMatch(/never reached/);
+  });
+});

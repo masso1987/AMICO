@@ -24,7 +24,12 @@ export class MockProviderAdapter implements ProviderAdapter {
   readonly movements: Array<{ kind: string; req: MoneyRequest; reference: string }> = [];
   private readonly byKey = new Map<string, { initial: OperationResult; final: OperationResult }>();
 
-  constructor(private readonly opts: { feeInquiry?: (q: FeeInquiry) => number | null } = {}) {}
+  /**
+   * recall: looks up the amount of an operation this instance did not perform itself
+   * (the API and the worker are separate processes, each with its own mock), so a
+   * status query gives the same scripted outcome whichever process asks.
+   */
+  constructor(private readonly opts: { feeInquiry?: (q: FeeInquiry) => number | null; recall?: (idempotencyKey: string) => Promise<number | null> } = {}) {}
 
   supports(_key: CapabilityKey): boolean {
     return true;
@@ -45,8 +50,12 @@ export class MockProviderAdapter implements ProviderAdapter {
 
   async queryStatus(idempotencyKey: string): Promise<OperationResult> {
     const entry = this.byKey.get(idempotencyKey);
-    if (!entry) return result('FAILED', null, 'No operation found for this key (it never reached the provider)');
-    return entry.final;
+    if (entry) return entry.final;
+    const amount = this.opts.recall ? await this.opts.recall(idempotencyKey) : null;
+    if (amount !== null && Number.isSafeInteger(amount) && amount > 0) {
+      return scripted(amount, `SIM-${randomUUID().slice(0, 8).toUpperCase()}`).final;
+    }
+    return result('FAILED', null, 'No operation found for this key (it never reached the provider)');
   }
 
   async inquireFee(q: FeeInquiry): Promise<number | null> {
@@ -78,34 +87,34 @@ export class MockProviderAdapter implements ProviderAdapter {
     }
 
     const ref = `SIM-${kind}-${randomUUID().slice(0, 8).toUpperCase()}`;
-    const tail = req.amount % 100;
-    let initial: OperationResult;
-    let final: OperationResult;
-    switch (tail) {
-      case 13:
-        initial = final = result('FAILED', ref, 'Simulated provider decline');
-        break;
-      case 17:
-        initial = result('UNKNOWN', null, 'Simulated timeout');
-        final = result('SUCCEEDED', ref, null);
-        break;
-      case 19:
-        initial = result('UNKNOWN', null, 'Simulated timeout');
-        final = result('FAILED', ref, 'Simulated failure discovered on status query');
-        break;
-      case 23:
-        initial = result('PENDING', ref, null);
-        final = result('SUCCEEDED', ref, null);
-        break;
-      case 29:
-        initial = final = result('UNKNOWN', null, 'Simulated provider with no answer');
-        break;
-      default:
-        initial = final = result('SUCCEEDED', ref, null);
-    }
+    const { initial, final } = scripted(req.amount, ref);
     if (final.status === 'SUCCEEDED') this.movements.push({ kind, req, reference: ref });
     this.byKey.set(req.idempotencyKey, { initial, final });
     return initial;
+  }
+}
+
+/** The scripted outcome for an amount (see the class comment). */
+function scripted(amount: number, ref: string): { initial: OperationResult; final: OperationResult } {
+  switch (amount % 100) {
+    case 13: {
+      const r = result('FAILED', ref, 'Simulated provider decline');
+      return { initial: r, final: r };
+    }
+    case 17:
+      return { initial: result('UNKNOWN', null, 'Simulated timeout'), final: result('SUCCEEDED', ref, null) };
+    case 19:
+      return { initial: result('UNKNOWN', null, 'Simulated timeout'), final: result('FAILED', ref, 'Simulated failure discovered on status query') };
+    case 23:
+      return { initial: result('PENDING', ref, null), final: result('SUCCEEDED', ref, null) };
+    case 29: {
+      const r = result('UNKNOWN', null, 'Simulated provider with no answer');
+      return { initial: r, final: r };
+    }
+    default: {
+      const r = result('SUCCEEDED', ref, null);
+      return { initial: r, final: r };
+    }
   }
 }
 

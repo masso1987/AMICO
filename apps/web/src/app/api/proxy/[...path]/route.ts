@@ -6,27 +6,32 @@ import { apiUrl, clearSession, getToken } from '@/lib/session';
  * attaches the session token and forwards to the AMICO API. Only customer
  * endpoints are reachable from here; admin routes belong to the admin dashboard.
  */
-const ALLOWED = [
-  /^services$/,
-  /^quotes$/,
-  /^transactions$/,
-  /^transactions\/[0-9a-f-]{36}$/,
-  /^transactions\/[0-9a-f-]{36}\/source-reference$/,
-  /^evidence$/,
-  /^notifications$/,
-  /^auth\/customer\/me$/,
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const ROUTES: { path: RegExp; methods: string[]; public?: boolean }[] = [
+  { path: /^services$/, methods: ['GET'], public: true },
+  { path: /^status$/, methods: ['GET'], public: true },
+  { path: /^public\/(config|sell-credit)$/, methods: ['GET'], public: true },
+  { path: /^offers$/, methods: ['GET'], public: true },
+  { path: new RegExp(`^offers/${UUID}/image$`), methods: ['GET'], public: true },
+  { path: /^bundles$/, methods: ['GET'], public: true },
+  { path: /^quotes$/, methods: ['POST'] },
+  { path: /^transactions$/, methods: ['GET', 'POST'] },
+  { path: new RegExp(`^transactions/${UUID}$`), methods: ['GET'] },
+  { path: new RegExp(`^transactions/${UUID}/(source-reference|cancel)$`), methods: ['POST'] },
+  { path: /^evidence$/, methods: ['POST'] },
+  { path: /^notifications$/, methods: ['GET'] },
+  { path: /^auth\/customer\/me$/, methods: ['GET', 'PATCH'] },
 ];
 
 async function forward(req: NextRequest, ctx: RouteContext<'/api/proxy/[...path]'>) {
   const { path } = await ctx.params;
   const joined = path.join('/');
-  if (!ALLOWED.some((r) => r.test(joined))) {
-    return NextResponse.json({ code: 'NOT_FOUND', message: 'Not found' }, { status: 404 });
-  }
+  const route = ROUTES.find((r) => r.path.test(joined));
+  if (!route) return NextResponse.json({ code: 'NOT_FOUND', message: 'Not found' }, { status: 404 });
+  if (!route.methods.includes(req.method)) return NextResponse.json({ code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed' }, { status: 405 });
+
   const token = await getToken();
-  if (!token && joined !== 'services') {
-    return NextResponse.json({ code: 'UNAUTHENTICATED', message: 'Please sign in' }, { status: 401 });
-  }
+  if (!token && !route.public) return NextResponse.json({ code: 'UNAUTHENTICATED', message: 'Please sign in' }, { status: 401 });
 
   const headers = new Headers();
   for (const h of ['content-type', 'idempotency-key', 'accept']) {
@@ -38,19 +43,30 @@ async function forward(req: NextRequest, ctx: RouteContext<'/api/proxy/[...path]
   if (fwd) headers.set('x-forwarded-for', fwd);
 
   const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
-  const res = await fetch(apiUrl(`/${joined}${req.nextUrl.search}`), {
-    method: req.method,
-    headers,
-    body: hasBody ? await req.arrayBuffer() : undefined,
-    cache: 'no-store',
-  });
+  let res: Response;
+  try {
+    res = await fetch(apiUrl(`/${joined}${req.nextUrl.search}`), {
+      method: req.method,
+      headers,
+      body: hasBody ? await req.arrayBuffer() : undefined,
+      cache: 'no-store',
+    });
+  } catch {
+    return NextResponse.json({ code: 'UPSTREAM_UNAVAILABLE', message: 'AMICO is unreachable' }, { status: 502 });
+  }
 
-  if (res.status === 401) await clearSession();
+  if (res.status === 401 && token) await clearSession();
+  const isImage = joined.startsWith('offers/') && res.ok;
   return new NextResponse(res.body, {
     status: res.status,
-    headers: { 'content-type': res.headers.get('content-type') ?? 'application/json', 'cache-control': 'no-store' },
+    headers: {
+      'content-type': res.headers.get('content-type') ?? 'application/json',
+      'cache-control': isImage ? 'public, max-age=86400' : 'no-store',
+      'x-content-type-options': 'nosniff',
+    },
   });
 }
 
 export const GET = forward;
 export const POST = forward;
+export const PATCH = forward;

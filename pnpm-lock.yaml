@@ -20,6 +20,9 @@ importers:
       '@amico/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@fontsource-variable/dm-sans':
+        specifier: ^5.3.0
+        version: 5.3.0
       '@fontsource-variable/manrope':
         specifier: ^5.3.0
         version: 5.3.0
@@ -181,7 +184,7 @@ importers:
       '@amico/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
-      '@fontsource-variable/manrope':
+      '@fontsource-variable/dm-sans':
         specifier: ^5.3.0
         version: 5.3.0
       '@fontsource/cinzel':
@@ -652,6 +655,9 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@fontsource-variable/dm-sans@5.3.0':
+    resolution: {integrity: sha512-BpUG5bqePiDFMBM4ZtLSlPdAIOM990uB1dlXzIf4aw21yQR7BmykedLXXXMqGWsR18aMLOsbWccwJNh3ztTQaA==}
 
   '@fontsource-variable/manrope@5.3.0':
     resolution: {integrity: sha512-6D5dgokHsWDDMtmXHznKa0hK229NN+1a4BLPmUCLqcO1Pw5EEhWY5RFt0AcXnVRAljFFPfRtLkJePQj6LSsV6g==}
@@ -4905,6 +4911,8 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.2':
     optional: true
+
+  '@fontsource-variable/dm-sans@5.3.0': {}
 
   '@fontsource-variable/manrope@5.3.0': {}
 
