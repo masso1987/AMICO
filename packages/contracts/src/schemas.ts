@@ -17,14 +17,18 @@ export const Msisdn = z
   .transform((s) => (s.length === 9 ? `237${s}` : s))
   .refine((s) => /^2376\d{8}$/.test(s), 'Expected a Cameroon mobile number like 6XXXXXXXX');
 
-export const QuoteRequestSchema = z.object({
-  serviceCode: z.string().min(3),
-  /** Amount the customer sends (deduct mode) or wants delivered (add mode); the rule decides. */
-  amount: PositiveFcfa,
-  recipientMsisdn: Msisdn,
-  /** Customer's own number the source payment comes from. */
-  senderMsisdn: Msisdn,
-});
+export const QuoteRequestSchema = z
+  .object({
+    serviceCode: z.string().min(3),
+    /** Amount the customer sends (deduct mode) or wants delivered (add mode); the rule decides. Omitted for a bundle. */
+    amount: PositiveFcfa.optional(),
+    /** Bundle purchases: the bundle's own price is the amount. */
+    bundleId: z.string().uuid().optional(),
+    recipientMsisdn: Msisdn,
+    /** Customer's own number the source payment comes from. */
+    senderMsisdn: Msisdn,
+  })
+  .refine((q) => (q.amount === undefined) !== (q.bundleId === undefined), { message: 'Send either an amount or a bundle', path: ['amount'] });
 export type QuoteRequest = z.infer<typeof QuoteRequestSchema>;
 
 export const CreateTransactionSchema = z.object({
@@ -115,3 +119,8 @@ export const PaginationSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(25),
 });
+
+export const CancelTransactionSchema = z.object({
+  reason: z.string().trim().max(300).optional(),
+});
+export type CancelTransactionInput = z.infer<typeof CancelTransactionSchema>;

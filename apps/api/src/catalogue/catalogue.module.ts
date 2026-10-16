@@ -7,6 +7,7 @@ import { AuditService } from '../audit/audit.service';
 import { CapabilityService } from '../providers/providers.module';
 import { PricingModule } from '../pricing/pricing.module';
 import { PricingService } from '../pricing/pricing.service';
+import { MaintenanceModule, MaintenanceService } from '../maintenance/maintenance.module';
 import { CurrentStaff, StaffAuth, type StaffPrincipal } from '../auth/auth.guard';
 import { ZodPipe } from '../common/zod.pipe';
 import { DomainError, NotFound } from '../common/errors';
@@ -23,6 +24,7 @@ export class CatalogueService {
     private readonly prisma: PrismaService,
     private readonly capabilities: CapabilityService,
     private readonly pricing: PricingService,
+    private readonly maintenance: MaintenanceService,
   ) {}
 
   /**
@@ -32,6 +34,7 @@ export class CatalogueService {
   async availability(service: Service & { receivingSim: SimAccount | null }, { ignoreStatus = false } = {}): Promise<Availability> {
     const reasons: string[] = [];
     if (!ignoreStatus && service.status !== 'ENABLED') reasons.push('Service is disabled');
+    if (!ignoreStatus && (await this.maintenance.blocking(service.code))) reasons.push('Paused for maintenance');
     const missing = await this.capabilities.missingCapabilities(service.requiredCapabilities as unknown as CapabilityRequirement[]);
     for (const m of missing) reasons.push(`Provider capability ${m.operator}:${m.capability} is not enabled and verified`);
     if (!(await this.pricing.activeRule(service.id))) reasons.push('No approved pricing rule in force');
@@ -159,7 +162,7 @@ export class CatalogueAdminController {
 }
 
 @Module({
-  imports: [PricingModule],
+  imports: [PricingModule, MaintenanceModule],
   controllers: [CatalogueController, CatalogueAdminController],
   providers: [CatalogueService],
   exports: [CatalogueService],

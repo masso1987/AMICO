@@ -30,14 +30,6 @@ export class LedgerService {
   }
 }
 
-@Injectable()
-export class NotificationService {
-  /** Persists an in-app notification. Push/SMS delivery is a P4 worker concern. */
-  notify(tx: Tx, n: { customerId: string; transactionId?: string; kind: string; title: string; body: string }) {
-    return tx.notification.create({ data: { customerId: n.customerId, transactionId: n.transactionId ?? null, kind: n.kind, title: n.title, body: n.body } });
-  }
-}
-
 @Global()
-@Module({ providers: [LedgerService, NotificationService], exports: [LedgerService, NotificationService] })
+@Module({ providers: [LedgerService], exports: [LedgerService] })
 export class LedgerModule {}

@@ -2,7 +2,7 @@ import { Body, Controller, Get, HttpStatus, Injectable, Module, Param, ParseUUID
 import { ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { z } from 'zod';
-import { StaffRole } from '@amico/contracts';
+import { Msisdn } from '@amico/contracts';
 import { CurrentStaff, StaffAuth, type StaffPrincipal } from '../auth/auth.guard';
 import { hashPassword, temporaryPassword } from '../auth/staff-auth';
 import { Conflict, DomainError, Forbidden, NotFound } from '../common/errors';
@@ -11,12 +11,26 @@ import { PrismaService, type Tx } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import type { StaffUser } from '../generated/prisma/client';
 
-const Roles = z.array(z.nativeEnum(StaffRole)).min(1, 'Pick at least one role').max(4).transform((r) => [...new Set(r)].sort() as StaffRole[]);
+const Roles = z.array(z.string().trim().min(2).max(40)).min(1, 'Pick at least one role').max(10).transform((r) => [...new Set(r)].sort());
+const AlertChannels = z.array(z.enum(['SMS', 'WHATSAPP'])).max(2).transform((c) => [...new Set(c)]);
 const Reason = z.string().trim().min(5, 'Give a short reason').max(500);
-const CreateSchema = z.object({ email: z.string().trim().email().toLowerCase(), fullName: z.string().trim().min(2).max(120), roles: Roles });
+const CreateSchema = z.object({
+  email: z.string().trim().email().toLowerCase(),
+  fullName: z.string().trim().min(2).max(120),
+  roles: Roles,
+  phone: Msisdn.nullable().optional(),
+  alertChannels: AlertChannels.optional(),
+});
 const UpdateSchema = z
-  .object({ fullName: z.string().trim().min(2).max(120).optional(), roles: Roles.optional(), active: z.boolean().optional(), reason: Reason })
-  .refine((b) => b.fullName !== undefined || b.roles !== undefined || b.active !== undefined, 'Nothing to change');
+  .object({
+    fullName: z.string().trim().min(2).max(120).optional(),
+    roles: Roles.optional(),
+    active: z.boolean().optional(),
+    phone: Msisdn.nullable().optional(),
+    alertChannels: AlertChannels.optional(),
+    reason: Reason,
+  })
+  .refine((b) => ['fullName', 'roles', 'active', 'phone', 'alertChannels'].some((k) => b[k as keyof typeof b] !== undefined), 'Nothing to change');
 const ReasonSchema = z.object({ reason: Reason });
 
 /** What the staff page sees. Hashes and TOTP secrets never leave the service. */
@@ -28,6 +42,8 @@ function view(s: StaffUser) {
     roles: s.roles,
     active: s.active,
     twoFactorEnabled: s.totpEnabledAt !== null,
+    phone: s.phone,
+    alertChannels: s.alertChannels,
     mustChangePassword: s.mustChangePassword,
     lastLoginAt: s.lastLoginAt,
     createdAt: s.createdAt,
@@ -49,9 +65,13 @@ export class StaffService {
   /** Returns the temporary password exactly once; it must be replaced at first sign-in. */
   async create(actorId: string, input: z.infer<typeof CreateSchema>, ip?: string) {
     if (await this.prisma.staffUser.findUnique({ where: { email: input.email } })) throw Conflict('EMAIL_TAKEN', 'A staff account already uses this email');
+    await this.assertRolesExist(input.roles);
     const password = temporaryPassword();
     const s = await this.prisma.staffUser.create({
-      data: { email: input.email, fullName: input.fullName, roles: input.roles, passwordHash: await hashPassword(password), mustChangePassword: true },
+      data: {
+        email: input.email, fullName: input.fullName, roles: input.roles, passwordHash: await hashPassword(password), mustChangePassword: true,
+        phone: input.phone ?? null, alertChannels: input.alertChannels ?? [],
+      },
     });
     await this.audit.record({ actorType: 'STAFF', actorId, action: 'staff.created', entityType: 'StaffUser', entityId: s.id, after: { email: s.email, fullName: s.fullName, roles: s.roles }, ip });
     return { staff: view(s), temporaryPassword: password };
@@ -59,6 +79,7 @@ export class StaffService {
 
   async update(actorId: string, id: string, input: z.infer<typeof UpdateSchema>, ip?: string) {
     if (id === actorId) throw Forbidden('SELF_CHANGE', 'Ask another administrator to change your own roles or status');
+    if (input.roles) await this.assertRolesExist(input.roles);
     return this.prisma.$transaction(async (tx) => {
       const before = await this.lock(tx, id);
       const roles = input.roles ?? before.roles;
@@ -68,13 +89,18 @@ export class StaffService {
       const narrowing = !active || before.roles.some((r) => !roles.includes(r));
       const s = await tx.staffUser.update({
         where: { id },
-        data: { fullName: input.fullName ?? before.fullName, roles, active, ...(narrowing ? { sessionVersion: { increment: 1 } } : {}) },
+        data: {
+          fullName: input.fullName ?? before.fullName, roles, active,
+          ...(input.phone !== undefined ? { phone: input.phone } : {}),
+          ...(input.alertChannels !== undefined ? { alertChannels: input.alertChannels } : {}),
+          ...(narrowing ? { sessionVersion: { increment: 1 } } : {}),
+        },
       });
       await this.audit.record(
         {
           actorType: 'STAFF', actorId, action: 'staff.updated', entityType: 'StaffUser', entityId: id, ip,
-          before: { fullName: before.fullName, roles: before.roles, active: before.active },
-          after: { fullName: s.fullName, roles: s.roles, active: s.active, reason: input.reason },
+          before: { fullName: before.fullName, roles: before.roles, active: before.active, phone: before.phone, alertChannels: before.alertChannels },
+          after: { fullName: s.fullName, roles: s.roles, active: s.active, phone: s.phone, alertChannels: s.alertChannels, reason: input.reason },
         },
         tx,
       );
@@ -106,6 +132,12 @@ export class StaffService {
       await this.audit.record({ actorType: 'STAFF', actorId, action: 'staff.2fa.reset', entityType: 'StaffUser', entityId: id, after: { reason }, ip }, tx);
       return view(s);
     });
+  }
+
+  private async assertRolesExist(roles: string[]) {
+    const found = await this.prisma.accessRole.findMany({ where: { key: { in: roles } }, select: { key: true } });
+    const missing = roles.filter((r) => !found.some((f) => f.key === r));
+    if (missing.length) throw new DomainError('UNKNOWN_ROLE', `Unknown role: ${missing.join(', ')}`);
   }
 
   private async lock(tx: Tx, id: string): Promise<StaffUser> {

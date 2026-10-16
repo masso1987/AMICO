@@ -11,6 +11,16 @@ import { PricingModule } from './pricing/pricing.module';
 import { CatalogueModule } from './catalogue/catalogue.module';
 import { SimsModule } from './sims/sims.module';
 import { StaffModule } from './staff/staff.module';
+import { AccessModule } from './access/access.module';
+import { SettingsModule } from './settings/settings.module';
+import { MessagingModule } from './messaging/messaging.module';
+import { CancellationService } from './refunds/cancellation.service';
+import { BundlesModule } from './bundles/bundles.module';
+import { MaintenanceModule } from './maintenance/maintenance.module';
+import { OffersModule } from './offers/offers.module';
+import { MonitoringModule } from './monitoring/monitoring.module';
+import { DashboardModule } from './dashboard/dashboard.module';
+import { SchedulerModule } from './scheduler/scheduler.module';
 import { LedgerModule } from './ledger/ledger.service';
 import { JobsModule } from './jobs/jobs.service';
 import { TransactionStateService } from './transactions/state.service';
@@ -43,6 +53,15 @@ import { HealthController } from './health/health.controller';
     CatalogueModule,
     SimsModule,
     StaffModule,
+    AccessModule,
+    SettingsModule,
+    MessagingModule,
+    MaintenanceModule,
+    BundlesModule,
+    OffersModule,
+    MonitoringModule,
+    DashboardModule,
+    SchedulerModule,
     // Rate limits apply everywhere except the automated test run (supertest shares one IP).
     ThrottlerModule.forRoot({ throttlers: [{ ttl: 60_000, limit: 300 }], skipIf: () => process.env.NODE_ENV === 'test' }),
   ],
@@ -67,6 +86,7 @@ import { HealthController } from './health/health.controller';
     ProcessingService,
     VerificationService,
     RefundsService,
+    CancellationService,
   ],
 })
 export class AppModule {}

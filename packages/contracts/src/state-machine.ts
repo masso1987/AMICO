@@ -33,7 +33,8 @@ export const TRANSITIONS: Readonly<Record<TransactionState, readonly Transaction
   // Review outcomes: source cleared, rejected (nothing received), refund, or a payout
   // whose uncertain outcome was resolved by status query / reconciliation.
   [S.UNDER_REVIEW]: [S.SOURCE_VERIFIED, S.REJECTED, S.REFUND_PENDING, S.DELIVERY_PENDING, S.FAILED],
-  [S.SOURCE_VERIFIED]: [S.PAYOUT_PROCESSING],
+  // REFUND_PENDING: the customer cancelled before payout; what we received goes back (minus the cancellation fee).
+  [S.SOURCE_VERIFIED]: [S.PAYOUT_PROCESSING, S.REFUND_PENDING],
   [S.PAYOUT_PROCESSING]: [S.DELIVERY_PENDING, S.UNDER_REVIEW, S.FAILED],
   [S.DELIVERY_PENDING]: [S.COMPLETED, S.FAILED, S.UNDER_REVIEW],
   [S.FAILED]: [S.REFUND_PENDING],

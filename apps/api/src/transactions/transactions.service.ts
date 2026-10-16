@@ -1,6 +1,6 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
-import { ASSET_META, type SubmitSourceReferenceInput } from '@amico/contracts';
+import { ASSET_META, productGroupOf, type SubmitSourceReferenceInput } from '@amico/contracts';
 import { checkQuoteAcceptable } from '@amico/pricing';
 import { ENV, type Env } from '../config/env';
 import { PrismaService } from '../prisma/prisma.service';
@@ -8,6 +8,11 @@ import { CatalogueService } from '../catalogue/catalogue.module';
 import { PricingService } from '../pricing/pricing.service';
 import { JobsService } from '../jobs/jobs.service';
 import { AuditService } from '../audit/audit.service';
+import { SettingsService } from '../settings/settings.module';
+import { NotificationService } from '../messaging/notifications.service';
+import { CancellationService } from '../refunds/cancellation.service';
+import { MaintenanceService } from '../maintenance/maintenance.module';
+import { cancellationFee } from '../refunds/open-refund';
 import { TransactionStateService } from './state.service';
 import { Conflict, DomainError, NotFound } from '../common/errors';
 import { decrypt } from '../common/crypto';
@@ -32,6 +37,10 @@ export class TransactionsService {
     private readonly jobs: JobsService,
     private readonly audit: AuditService,
     private readonly state: TransactionStateService,
+    private readonly settings: SettingsService,
+    private readonly notifications: NotificationService,
+    private readonly cancellation: CancellationService,
+    private readonly maintenance: MaintenanceService,
     @Inject(ENV) private readonly env: Env,
   ) {}
 
@@ -51,7 +60,13 @@ export class TransactionsService {
     if (quote.transaction) throw Conflict('QUOTE_ALREADY_USED', 'This quote has already been accepted');
 
     // Service must still be usable, and the quoted terms must still be the terms in force.
+    await this.maintenance.assertOpen(quote.service.code);
     const service = await this.catalogue.getUsableService(quote.service.code);
+    if (quote.bundleId) {
+      const bundle = await this.prisma.bundle.findUnique({ where: { id: quote.bundleId } });
+      if (!bundle || !bundle.active || bundle.deletedAt || bundle.withdrawnAt) throw Conflict('BUNDLE_UNAVAILABLE', 'This bundle is no longer available. Choose another one.');
+      if (bundle.price !== quote.amount) throw Conflict('BUNDLE_PRICE_CHANGED', 'The operator changed this bundle’s price. Get a new quote.');
+    }
     const rule = await this.pricing.activeRule(service.id);
     const pf = await this.pricing.providerFee(service, quote.amount);
     const check = checkQuoteAcceptable({
@@ -80,7 +95,7 @@ export class TransactionsService {
             amount: quote.amount, customerPays: quote.customerPays, platformFee: quote.platformFee, providerFee: quote.providerFee,
             providerFeeCollectedBy: b.providerFee.collectedBy, payoutInstructionAmount: b.payoutInstructionAmount, expectedDelivered: quote.expectedDelivered,
             senderMsisdn: quote.senderMsisdn, recipientMsisdn: quote.recipientMsisdn, receivingSimId: manual ? service.receivingSimId : null,
-            riskLevel, isSimulated: quote.isSimulated,
+            riskLevel, isSimulated: quote.isSimulated, bundleId: quote.bundleId,
           },
         });
         await tx.transactionStateHistory.create({ data: { transactionId: created.id, toState: 'CREATED', actorType: 'CUSTOMER', actorId: customerId, reason: 'Transaction opened from quote' } });
@@ -131,15 +146,61 @@ export class TransactionsService {
     return this.present(transactionId, customerId);
   }
 
+  /**
+   * Customer cancellation (Switchn rules):
+   *  - nothing received yet: closed at once, free;
+   *  - payment / airtime possibly received: we finish confirming it, then refund minus the cancellation fee;
+   *  - payout already started: too late.
+   */
+  async cancel(customerId: string, transactionId: string, reason?: string) {
+    const prefs = await this.settings.get('cancellation');
+    let refunded = false;
+    await this.prisma.$transaction(async (tx) => {
+      const txn = await this.state.lock(tx, transactionId);
+      if (txn.customerId !== customerId) throw NotFound('Transaction');
+      if (txn.cancelRequestedAt) return; // idempotent
+      const actor = CUSTOMER(customerId);
+      const mark = () => tx.transaction.update({ where: { id: txn.id }, data: { cancelRequestedAt: new Date(), cancelReason: reason ?? null } });
+
+      if (txn.state === 'AWAITING_SOURCE_PAYMENT') {
+        await mark();
+        await this.state.transition(tx, { transactionId: txn.id, to: 'REJECTED', actor, reason: `Cancelled by the customer before payment${reason ? `: ${reason}` : ''}`, locked: txn });
+        await tx.manualVerification.updateMany({ where: { transactionId: txn.id }, data: { status: 'REJECTED', reason: 'Cancelled by the customer before sending airtime', version: { increment: 1 } } });
+        await this.notifications.notify(tx, { customerId, transactionId: txn.id, kind: 'CANCELLED', params: { ref: txn.reference } });
+      } else if (['AWAITING_MANUAL_VERIFICATION', 'PAYMENT_PROCESSING', 'SOURCE_VERIFIED'].includes(txn.state)) {
+        if (!prefs.allowAfterPayment) throw Conflict('CANNOT_CANCEL', 'This transaction can no longer be cancelled');
+        await mark();
+        await this.state.addNote(tx, txn.id, actor, `Customer asked to cancel${reason ? `: ${reason}` : ''}. Refund minus ${prefs.feeBps / 100}% once the payment is confirmed.`);
+        await this.audit.record({ actorType: 'CUSTOMER', actorId: customerId, action: 'transaction.cancel_requested', entityType: 'Transaction', entityId: txn.id, after: { state: txn.state, reason: reason ?? null } }, tx);
+        if (txn.state === 'SOURCE_VERIFIED') {
+          refunded = await this.cancellation.refundIfCancelled(tx, { ...txn, cancelRequestedAt: new Date(), cancelReason: reason ?? null });
+        }
+      } else {
+        throw Conflict('TOO_LATE_TO_CANCEL', 'Delivery has already started, so this transaction can’t be cancelled');
+      }
+    });
+    void refunded;
+    return this.present(transactionId, customerId);
+  }
+
   async listForCustomer(customerId: string, page: number, pageSize: number) {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.transaction.findMany({
         where: { customerId }, orderBy: { createdAt: 'desc' }, skip: (page - 1) * pageSize, take: pageSize,
-        include: { service: { select: { code: true, name: true } } },
+        include: { service: { select: { code: true, name: true, sourceAsset: true, destinationAsset: true } }, bundle: { select: { name: true, nameFr: true } } },
       }),
       this.prisma.transaction.count({ where: { customerId } }),
     ]);
-    return { page, pageSize, total, items: items.map((t) => ({ id: t.id, reference: t.reference, service: t.service, state: t.state, customerPays: t.customerPays, expectedDelivered: t.expectedDelivered, simulated: t.isSimulated, createdAt: t.createdAt })) };
+    return {
+      page, pageSize, total,
+      items: items.map((t) => ({
+        id: t.id, reference: t.reference, service: { code: t.service.code, name: t.service.name, sourceAsset: t.service.sourceAsset, destinationAsset: t.service.destinationAsset },
+        group: productGroupOf({ source: t.service.sourceAsset, destination: t.service.destinationAsset }),
+        bundle: t.bundle ? { name: t.bundle.name, nameFr: t.bundle.nameFr ?? t.bundle.name } : null,
+        state: t.state, customerPays: t.customerPays, expectedDelivered: t.expectedDelivered, recipient: t.recipientMsisdn,
+        cancelRequested: t.cancelRequestedAt !== null, simulated: t.isSimulated, createdAt: t.createdAt,
+      })),
+    };
   }
 
   async present(transactionId: string, customerId: string) {
@@ -147,8 +208,10 @@ export class TransactionsService {
       where: { id: transactionId },
       include: {
         service: true,
+        bundle: true,
         history: { orderBy: { createdAt: 'asc' }, select: { toState: true, reason: true, createdAt: true } },
         manualVerification: { select: { status: true, customerReference: true, submittedAt: true } },
+        refunds: { orderBy: { createdAt: 'desc' }, select: { id: true, amount: true, feeRetained: true, kind: true, status: true, createdAt: true } },
       },
     });
     if (!t || t.customerId !== customerId) throw NotFound('Transaction');
@@ -175,6 +238,9 @@ export class TransactionsService {
     }
 
     const done = t.state === 'COMPLETED';
+    const prefs = await this.settings.get('cancellation');
+    const beforePayment = t.state === 'AWAITING_SOURCE_PAYMENT';
+    const afterPayment = ['AWAITING_MANUAL_VERIFICATION', 'PAYMENT_PROCESSING', 'SOURCE_VERIFIED'].includes(t.state) && prefs.allowAfterPayment;
     return {
       id: t.id,
       reference: t.reference,
@@ -182,6 +248,17 @@ export class TransactionsService {
       simulationNotice: t.isSimulated ? 'SIMULATION — no real money or airtime is moved for this transaction.' : null,
       state: t.state,
       service: { code: t.service.code, name: t.service.name, sourceAsset: t.service.sourceAsset, destinationAsset: t.service.destinationAsset },
+      group: productGroupOf({ source: t.service.sourceAsset, destination: t.service.destinationAsset }),
+      bundle: t.bundle ? { name: t.bundle.name, nameFr: t.bundle.nameFr ?? t.bundle.name, validityDays: t.bundle.validityDays } : null,
+      cancellation: {
+        requested: t.cancelRequestedAt !== null,
+        requestedAt: t.cancelRequestedAt,
+        possible: !t.cancelRequestedAt && (beforePayment || afterPayment),
+        /** What a cancellation costs right now. */
+        fee: beforePayment ? 0 : cancellationFee(t.customerPays, prefs.feeBps),
+        feeBps: prefs.feeBps,
+      },
+      refunds: t.refunds,
       conversionRate: (() => {
         const ppm = (t.acceptedTerms as { quote?: { conversionRatePpm?: number } }).quote?.conversionRatePpm ?? 1_000_000;
         return ppm === 1_000_000 ? null : ppm / 1_000_000;

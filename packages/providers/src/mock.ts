@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import type { CapabilityKey, FeeInquiry, MoneyRequest, OperationResult, OperationStatus, ProviderAdapter } from './adapter';
+import type { Operator } from '@amico/contracts';
+import type { CapabilityKey, FeeInquiry, MoneyRequest, OperationResult, OperationStatus, ProviderAdapter, ProviderBundle } from './adapter';
 
 /**
  * Mock provider for development and tests. Every result is marked simulated.
@@ -50,6 +51,20 @@ export class MockProviderAdapter implements ProviderAdapter {
 
   async inquireFee(q: FeeInquiry): Promise<number | null> {
     return this.opts.feeInquiry ? this.opts.feeInquiry(q) : null;
+  }
+
+  /** A small, clearly fictional catalogue so the bundle screens can be exercised in simulation. */
+  async listBundles(operator: Operator): Promise<ProviderBundle[]> {
+    const p = operator === 'MTN' ? 'SIM-MTN' : 'SIM-OR';
+    const label = operator === 'MTN' ? 'MTN' : 'Orange';
+    return [
+      { productId: `${p}-D100`, operator, name: `${label} Day 100 MB (simulated)`, category: 'DATA', validity: 'DAY', validityDays: 1, price: 100, dataMb: 100 },
+      { productId: `${p}-D1G`, operator, name: `${label} Day 1 GB (simulated)`, category: 'DATA', validity: 'DAY', validityDays: 1, price: 500, dataMb: 1024 },
+      { productId: `${p}-W2G`, operator, name: `${label} Week 2 GB (simulated)`, category: 'DATA', validity: 'WEEK', validityDays: 7, price: 1000, dataMb: 2048 },
+      { productId: `${p}-W-CALL`, operator, name: `${label} Week calls 60 min (simulated)`, category: 'VOICE', validity: 'WEEK', validityDays: 7, price: 1000, voiceMinutes: 60 },
+      { productId: `${p}-M10G`, operator, name: `${label} Month 10 GB (simulated)`, category: 'DATA', validity: 'MONTH', validityDays: 30, price: 5000, dataMb: 10240 },
+      { productId: `${p}-M-MIX`, operator, name: `${label} Month mix 5 GB + 100 min + 100 SMS (simulated)`, category: 'COMBO', validity: 'MONTH', validityDays: 30, price: 6500, dataMb: 5120, voiceMinutes: 100, smsCount: 100 },
+    ];
   }
 
   private async perform(kind: string, req: MoneyRequest): Promise<OperationResult> {

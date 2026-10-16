@@ -163,21 +163,69 @@ export class RefundsAdminController {
   }
 }
 
-const AuditQuery = PaginationSchema.extend({ entityType: z.string().optional(), entityId: z.string().optional(), actorId: z.string().optional() });
+const AuditFilters = z.object({
+  entityType: z.string().max(40).optional(),
+  entityId: z.string().max(80).optional(),
+  actorId: z.string().max(80).optional(),
+  actorType: z.enum(['CUSTOMER', 'STAFF', 'SYSTEM', 'PROVIDER']).optional(),
+  /** Matches the start of the action, e.g. "refund." or "staff.login". */
+  action: z.string().max(60).optional(),
+  from: z.coerce.date().optional(),
+  to: z.coerce.date().optional(),
+});
+const AuditQuery = PaginationSchema.merge(AuditFilters);
+
+function auditWhere(q: z.infer<typeof AuditFilters>): Prisma.AuditLogWhereInput {
+  return {
+    ...(q.entityType ? { entityType: q.entityType } : {}),
+    ...(q.entityId ? { entityId: q.entityId } : {}),
+    ...(q.actorId ? { actorId: q.actorId } : {}),
+    ...(q.actorType ? { actorType: q.actorType } : {}),
+    ...(q.action ? { action: { startsWith: q.action } } : {}),
+    ...(q.from || q.to ? { createdAt: { ...(q.from ? { gte: q.from } : {}), ...(q.to ? { lt: q.to } : {}) } } : {}),
+  };
+}
+
+function csvCell(v: unknown): string {
+  const s = v === null || v === undefined ? '' : typeof v === 'string' ? v : v instanceof Date ? v.toISOString() : JSON.stringify(v);
+  // Neutralise spreadsheet formulas, then quote.
+  const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
 
 @ApiTags('admin / audit')
 @Controller('admin/audit-logs')
 export class AuditAdminController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   @Get()
   @StaffAuth('AUDIT_READ')
   async list(@Query(new ZodPipe(AuditQuery)) q: z.infer<typeof AuditQuery>) {
-    const where = { ...(q.entityType ? { entityType: q.entityType } : {}), ...(q.entityId ? { entityId: q.entityId } : {}), ...(q.actorId ? { actorId: q.actorId } : {}) };
+    const where = auditWhere(q);
     const [items, total] = await this.prisma.$transaction([
       this.prisma.auditLog.findMany({ where, orderBy: { createdAt: 'desc' }, skip: (q.page - 1) * q.pageSize, take: q.pageSize }),
       this.prisma.auditLog.count({ where }),
     ]);
-    return { page: q.page, pageSize: q.pageSize, total, items };
+    const staffIds = [...new Set(items.filter((i) => i.actorType === 'STAFF' && i.actorId).map((i) => i.actorId!))];
+    const staff = await this.prisma.staffUser.findMany({ where: { id: { in: staffIds } }, select: { id: true, fullName: true, email: true } });
+    return { page: q.page, pageSize: q.pageSize, total, items, actors: Object.fromEntries(staff.map((s) => [s.id, { name: s.fullName, email: s.email }])) };
+  }
+
+  /** CSV of the filtered log (max 50 000 rows). The export itself is audited. */
+  @Get('export')
+  @StaffAuth('AUDIT_READ')
+  async export(@Query(new ZodPipe(AuditFilters)) q: z.infer<typeof AuditFilters>, @CurrentStaff() me: StaffPrincipal, @Res() res: Response) {
+    const rows = await this.prisma.auditLog.findMany({ where: auditWhere(q), orderBy: { createdAt: 'desc' }, take: 50_000 });
+    const staff = await this.prisma.staffUser.findMany({ select: { id: true, email: true } });
+    const email = new Map(staff.map((s) => [s.id, s.email]));
+    await this.audit.record({ actorType: 'STAFF', actorId: me.id, action: 'audit.exported', entityType: 'AuditLog', after: { filters: q, rows: rows.length } });
+    const head = ['createdAt', 'actorType', 'actor', 'action', 'entityType', 'entityId', 'ip', 'before', 'after'];
+    const lines = [head.join(','), ...rows.map((r) => [r.createdAt, r.actorType, r.actorType === 'STAFF' ? (email.get(r.actorId ?? '') ?? r.actorId) : r.actorId, r.action, r.entityType, r.entityId, r.ip, r.before, r.after].map(csvCell).join(','))];
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="amico-audit-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send('\ufeff' + lines.join('\r\n'));
   }
 }

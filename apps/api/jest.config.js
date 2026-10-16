@@ -6,5 +6,6 @@ module.exports = {
   transform: { '^.+\\.ts$': ['ts-jest', { tsconfig: 'tsconfig.test.json', isolatedModules: true }] },
   setupFiles: ['<rootDir>/test/env.ts'],
   globalSetup: '<rootDir>/test/global-setup.ts',
-  testTimeout: 30000,
+  // Staff sign-in waits for a fresh 30-second authenticator code when the same account signs in repeatedly.
+  testTimeout: 120000,
 };

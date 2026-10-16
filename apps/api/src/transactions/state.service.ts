@@ -62,4 +62,12 @@ export class TransactionStateService {
     });
     return updated;
   }
+
+  /** A timeline note that changes nothing (from = to = current state), e.g. "customer asked to cancel". */
+  async addNote(tx: Tx, transactionId: string, actor: Actor, reason: string) {
+    const t = await tx.transaction.findUniqueOrThrow({ where: { id: transactionId }, select: { state: true } });
+    await tx.transactionStateHistory.create({
+      data: { transactionId, fromState: t.state, toState: t.state, actorType: actor.type, actorId: actor.id ?? null, reason, metadata: { note: true } },
+    });
+  }
 }

@@ -1,7 +1,7 @@
 import { Body, Controller, Get, Module, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
-import { Fcfa, PositiveFcfa, PricingRuleDraftSchema, ProviderFeeRuleDraftSchema, type PricingRuleDraft, type ProviderFeeRuleDraft } from '@amico/contracts';
+import { Fcfa, PositiveFcfa, PricingRuleDraftSchema, ProviderFeeRuleDraftSchema, routesInGroup, type PricingRuleDraft, type ProviderFeeRuleDraft } from '@amico/contracts';
 import { ZodPipe } from '../common/zod.pipe';
 import { CurrentStaff, StaffAuth, type StaffPrincipal } from '../auth/auth.guard';
 import { PrismaService } from '../prisma/prisma.service';
@@ -15,6 +15,19 @@ const SimulateSchema = z.object({
   providerFeeAmount: Fcfa.optional(),
   providerDeductsAtSettlement: z.boolean().optional(),
 });
+
+/** One buy-back rate and one set of limits for every "sell credit" route (MTN and Orange). */
+const SellCreditSchema = z
+  .object({
+    /** Percentage of the airtime value paid to the customer, e.g. 85 or 82.5. */
+    ratePercent: z.number().min(1).max(100).multipleOf(0.01),
+    minAmount: PositiveFcfa.default(1_000),
+    maxAmount: PositiveFcfa.default(500_000),
+    effectiveFrom: z.coerce.date().optional(),
+    changeReason: z.string().trim().min(5).max(500),
+  })
+  .refine((b) => b.minAmount <= b.maxAmount, { message: 'Minimum must be ≤ maximum', path: ['minAmount'] });
+const ApproveManySchema = z.object({ ruleIds: z.array(z.string().uuid()).min(1).max(10) });
 
 @ApiTags('admin / pricing')
 @Controller('admin')
@@ -56,6 +69,54 @@ export class PricingAdminController {
   @StaffAuth('PRICING_APPROVE')
   retire(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(ReasonSchema)) body: z.infer<typeof ReasonSchema>, @CurrentStaff() staff: StaffPrincipal) {
     return this.pricing.retireRule(id, staff.id, body.reason);
+  }
+
+  /** Current buy-back rate per network route, plus drafts waiting for approval. */
+  @Get('pricing/sell-credit')
+  @StaffAuth('PRICING_DRAFT')
+  async sellCredit() {
+    const codes = routesInGroup('SELL_CREDIT');
+    const services = await this.prisma.service.findMany({ where: { code: { in: codes } }, select: { id: true, code: true, name: true, status: true } });
+    return Promise.all(
+      services.map(async (svc) => {
+        const active = await this.pricing.activeRule(svc.id);
+        const pending = await this.prisma.pricingRule.findMany({ where: { serviceId: svc.id, status: 'PENDING_APPROVAL' }, orderBy: { version: 'desc' } });
+        const view = (r: { id: string; version: number; conversionRatePpm: number; minAmount: number; maxAmount: number; createdById: string; effectiveFrom: Date }) => ({
+          id: r.id, version: r.version, ratePercent: r.conversionRatePpm / 10_000, minAmount: r.minAmount, maxAmount: r.maxAmount, createdById: r.createdById, effectiveFrom: r.effectiveFrom,
+        });
+        return { serviceCode: svc.code, name: svc.name, status: svc.status, active: active ? view(active) : null, pending: pending.map(view) };
+      }),
+    );
+  }
+
+  /** Drafts the same rate and limits for all four sell-credit routes. Each still needs a second person's approval. */
+  @Post('pricing/sell-credit')
+  @StaffAuth('PRICING_DRAFT')
+  async draftSellCredit(@Body(new ZodPipe(SellCreditSchema)) body: z.infer<typeof SellCreditSchema>, @CurrentStaff() staff: StaffPrincipal) {
+    const rate = Math.round(body.ratePercent * 10_000);
+    const out = [];
+    for (const serviceCode of routesInGroup('SELL_CREDIT')) {
+      out.push(
+        await this.pricing.draftRule(
+          {
+            serviceCode, feeType: 'FIXED', percentageBps: 0, fixedFee: 0, minFee: 0, maxFee: null,
+            minAmount: body.minAmount, maxAmount: body.maxAmount, deductionMethod: 'DEDUCT_FROM_DESTINATION', conversionRatePpm: rate,
+            feeRounding: 'UP', deliveryRounding: 'DOWN', effectiveFrom: body.effectiveFrom ?? new Date(), effectiveTo: null,
+            changeReason: `Sell-credit rate ${body.ratePercent}% for MTN and Orange${rate === 1_000_000 ? ' (1:1 verified)' : ''}: ${body.changeReason}`,
+          },
+          staff.id,
+        ),
+      );
+    }
+    return out;
+  }
+
+  @Post('pricing-rules/approve-many')
+  @StaffAuth('PRICING_APPROVE')
+  async approveMany(@Body(new ZodPipe(ApproveManySchema)) body: z.infer<typeof ApproveManySchema>, @CurrentStaff() staff: StaffPrincipal) {
+    const out = [];
+    for (const id of body.ruleIds) out.push(await this.pricing.approveRule(id, staff.id));
+    return out;
   }
 
   @Post('pricing/simulate')

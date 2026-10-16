@@ -55,13 +55,6 @@ enum ServiceStatus {
   ENABLED
 }
 
-enum StaffRole {
-  ADMIN
-  FINANCE
-  OPERATIONS
-  SUPPORT
-}
-
 enum RuleStatus {
   DRAFT
   PENDING_APPROVAL
@@ -178,6 +171,11 @@ model Customer {
   passwordHash    String
   phoneVerifiedAt DateTime?
   active          Boolean   @default(true)
+  /// 'en' (default) or 'fr': language of the app, SMS and WhatsApp messages.
+  locale          String    @default("en")
+  /// Transactional SMS can't be switched off; this covers announcements.
+  smsOptIn        Boolean   @default(true)
+  whatsappOptIn   Boolean   @default(false)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -192,7 +190,8 @@ model StaffUser {
   email        String      @unique
   fullName     String
   passwordHash String
-  roles        StaffRole[]
+  /// AccessRole keys. Permissions are read from AccessRole on every request.
+  roles        String[]
   /// TOTP secret, AES-256-GCM encrypted with APP_ENCRYPTION_KEY. Set (pending) at first sign-in.
   totpSecretEncrypted String?
   /// Set once the staff member has proved their authenticator works. Null = not enrolled.
@@ -204,9 +203,28 @@ model StaffUser {
   /// Bumped on password change, 2FA reset or deactivation: older tokens stop working at once.
   sessionVersion      Int         @default(0)
   lastLoginAt         DateTime?
+  /// For admin alerts by SMS / WhatsApp. 237XXXXXXXXX.
+  phone               String?
+  /// Channels this person receives platform alerts on: SMS, WHATSAPP. Empty = dashboard only.
+  alertChannels       String[]    @default([])
+  /// Personal dashboard: ordered widget ids. Null = role default.
+  dashboardLayout     Json?
+  locale              String      @default("en")
   active       Boolean     @default(true)
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
+}
+
+/// A role is a named set of permissions. Built-in roles (system = true) can be edited but not deleted.
+model AccessRole {
+  key           String   @id
+  name          String
+  description   String   @default("")
+  permissions   String[]
+  system        Boolean  @default(false)
+  updatedById   String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 // ---------------------------------------------------------------- SIMs and providers
@@ -372,6 +390,8 @@ model Quote {
   providerFeeRuleVersion Int?
   isEstimate             Boolean
   isSimulated            Boolean
+  bundleId               String?
+  bundle                 Bundle?  @relation(fields: [bundleId], references: [id])
   createdAt              DateTime @default(now())
   expiresAt              DateTime
 
@@ -406,6 +426,11 @@ model Transaction {
   receivingSimId          String?
   riskLevel               RiskLevel        @default(LOW)
   isSimulated             Boolean
+  bundleId                String?
+  bundle                  Bundle?          @relation(fields: [bundleId], references: [id])
+  /// Set when the customer asks to cancel. Before payment: closed at once; after: refunded minus the cancellation fee.
+  cancelRequestedAt       DateTime?
+  cancelReason            String?
   createdAt               DateTime         @default(now())
   updatedAt               DateTime         @updatedAt
 
@@ -492,6 +517,8 @@ model ProviderOperation {
   providerReference String?         @unique
   failureReason     String?
   statusChecks      Int             @default(0)
+  /// How long the first provider call took (monitoring).
+  durationMs        Int?
   simulated         Boolean
   createdAt         DateTime        @default(now())
   updatedAt         DateTime        @updatedAt
@@ -559,6 +586,11 @@ model Refund {
   amount        Int
   reason        String
   status        RefundStatus @default(REQUESTED)
+  /// STANDARD (staff), FAILURE (automatic, 100%), CANCELLATION (customer, minus fee).
+  kind          String       @default("STANDARD")
+  /// Cancellation fee kept by the platform; amount + feeRetained = what we held.
+  feeRetained   Int          @default(0)
+  /// A staff id, or "SYSTEM" for automatic failure / cancellation refunds.
   requestedById String
   approvedById  String?
   approvedAt    DateTime?
@@ -607,3 +639,239 @@ model IdempotencyRecord {
   responseBody   Json?
   createdAt      DateTime @default(now())
 }
+
+// ---------------------------------------------------------------- catalogue: bundles and offers
+
+enum BundleCategory {
+  DATA
+  VOICE
+  SMS
+  COMBO
+}
+
+enum BundleValidity {
+  DAY
+  WEEK
+  MONTH
+  OTHER
+}
+
+enum BundleSource {
+  PROVIDER
+  STAFF
+}
+
+/// Operator bundles (forfaits). PROVIDER rows come from a catalogue sync; staff may edit,
+/// hide or add their own. A bundle that was ever quoted is hidden, never hard-deleted.
+model Bundle {
+  id                String         @id @default(uuid())
+  operator          Operator
+  /// Provider that delivers it (MOCK in simulation).
+  providerCode      String
+  /// The provider's product code, sent when buying.
+  productId         String
+  name              String
+  nameFr            String?
+  description       String?
+  category          BundleCategory
+  validity          BundleValidity
+  validityDays      Int
+  price             Int
+  dataMb            Int?
+  voiceMinutes      Int?
+  smsCount          Int?
+  source            BundleSource
+  active            Boolean        @default(true)
+  featured          Boolean        @default(false)
+  /// Staff edited this provider bundle: a sync updates the price but keeps staff wording.
+  staffEdited       Boolean        @default(false)
+  /// Provider no longer lists it.
+  withdrawnAt       DateTime?
+  deletedAt         DateTime?
+  lastSyncedAt      DateTime?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  quotes       Quote[]
+  transactions Transaction[]
+
+  @@unique([providerCode, productId])
+  @@index([operator, active])
+}
+
+/// The "available credit" showcase on the home screen, managed by staff.
+model Offer {
+  id          String    @id @default(uuid())
+  titleEn     String
+  titleFr     String
+  bodyEn      String    @default("")
+  bodyFr      String    @default("")
+  operator    Operator?
+  badgeEn     String?
+  badgeFr     String?
+  /// BUNDLE, SERVICE, URL or NONE.
+  ctaKind     String    @default("NONE")
+  /// Bundle id, service product group, or https URL.
+  ctaTarget   String?
+  imageKey    String?
+  startsAt    DateTime  @default(now())
+  endsAt      DateTime?
+  sortOrder   Int       @default(0)
+  active      Boolean   @default(true)
+  createdById String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([active, startsAt])
+}
+
+// ---------------------------------------------------------------- platform: settings, maintenance, messaging, monitoring
+
+/// Small typed settings (cancellation fee, number plan, alert rules...). Values validated in the API.
+model AppSetting {
+  key         String   @id
+  value       Json
+  updatedById String?
+  updatedAt   DateTime @updatedAt
+}
+
+/// Planned or immediate maintenance. Empty serviceCodes = the whole platform.
+model MaintenanceWindow {
+  id                  String    @id @default(uuid())
+  serviceCodes        String[]
+  startsAt            DateTime
+  /// Null = until someone ends it.
+  endsAt              DateTime?
+  messageEn           String
+  messageFr           String
+  /// Send SMS / WhatsApp to customers before it starts.
+  notifyCustomers     Boolean   @default(true)
+  notifyLeadMinutes   Int       @default(60)
+  customersNotifiedAt DateTime?
+  startedNotifiedAt   DateTime?
+  endedAt             DateTime?
+  endedById           String?
+  createdById         String
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([startsAt])
+}
+
+enum MessageChannel {
+  SMS_MTN
+  SMS_ORANGE
+  WHATSAPP
+}
+
+enum MessageStatus {
+  QUEUED
+  SENDING
+  SENT
+  FAILED
+  SKIPPED
+}
+
+/// One row per gateway. Secrets are AES-256-GCM encrypted and never returned by the API.
+model MessagingChannel {
+  channel         MessageChannel @id
+  enabled         Boolean        @default(false)
+  /// TEST: messages are logged, nothing is sent. LIVE: the gateway is called.
+  live            Boolean        @default(false)
+  /// Adapter kind, e.g. ORANGE_SMS_API, MTN_SMS_V3, HTTP_GATEWAY, WHATSAPP_CLOUD.
+  driver          String
+  /// Non-secret settings: sender name, URLs, template names.
+  settings        Json           @default("{}")
+  secretsEncrypted String?
+  lastTestAt      DateTime?
+  lastTestOk      Boolean?
+  lastTestError   String?
+  updatedById     String?
+  updatedAt       DateTime       @updatedAt
+}
+
+/// Outbox: every SMS / WhatsApp message, written in the same database transaction as its cause.
+model OutboundMessage {
+  id                String          @id @default(uuid())
+  /// SMS (route by network), WHATSAPP (falls back to SMS), or a fixed channel.
+  requested         String
+  channel           MessageChannel?
+  to                String
+  body              String
+  locale            String          @default("en")
+  /// TRANSACTION, BROADCAST, ALERT, MAINTENANCE, TEST.
+  purpose           String
+  status            MessageStatus   @default(QUEUED)
+  attempts          Int             @default(0)
+  /// Retry schedule; a SENDING row older than its lease is returned to the queue.
+  nextAttemptAt     DateTime        @default(now())
+  providerMessageId String?
+  error             String?
+  /// True when the channel was in TEST mode: nothing left the platform.
+  testMode          Boolean         @default(false)
+  customerId        String?
+  staffId           String?
+  broadcastId       String?
+  createdAt         DateTime        @default(now())
+  sentAt            DateTime?
+
+  @@index([status, nextAttemptAt])
+  @@index([broadcastId])
+  @@index([createdAt])
+}
+
+model Broadcast {
+  id          String   @id @default(uuid())
+  /// { kind: ALL | ACTIVE_30D | NUMBERS | SERVICE_USERS, ... }
+  audience    Json
+  requested   String
+  bodyEn      String
+  bodyFr      String
+  recipients  Int      @default(0)
+  createdById String
+  createdAt   DateTime @default(now())
+}
+
+enum AlertSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+/// A platform alert. One open alert per key; repeats update lastSeenAt.
+model Alert {
+  id               String        @id @default(uuid())
+  /// Stable key, e.g. "component:ORANGE_MONEY" or "backlog:verifications".
+  key              String
+  severity         AlertSeverity
+  title            String
+  detail           String        @default("")
+  firstSeenAt      DateTime      @default(now())
+  lastSeenAt       DateTime      @default(now())
+  resolvedAt       DateTime?
+  acknowledgedById String?
+  acknowledgedAt   DateTime?
+  notifiedAt       DateTime?
+
+  @@index([key, resolvedAt])
+  @@index([firstSeenAt])
+}
+
+enum HealthStatus {
+  UP
+  DEGRADED
+  DOWN
+}
+
+/// One sample per component per minute; kept 14 days.
+model HealthSample {
+  id        String       @id @default(uuid())
+  component String
+  status    HealthStatus
+  latencyMs Int?
+  detail    Json?
+  at        DateTime     @default(now())
+
+  @@index([component, at])
+}
+

@@ -11,7 +11,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { ApiBearerAuth } from '@nestjs/swagger';
-import { ROLE_PERMISSIONS, type Permission, type StaffRole } from '@amico/contracts';
+import { ALL_PERMISSIONS, type Permission } from '@amico/contracts';
 import { DomainError } from '../common/errors';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -22,7 +22,7 @@ export interface CustomerPrincipal {
 export interface StaffPrincipal {
   kind: 'staff';
   id: string;
-  roles: StaffRole[];
+  roles: string[];
   permissions: Set<Permission>;
 }
 export type Principal = CustomerPrincipal | StaffPrincipal;
@@ -44,8 +44,13 @@ export const StaffAuth = (...permissions: Permission[]) =>
 export const CurrentCustomer = createParamDecorator((_: unknown, ctx: ExecutionContext): CustomerPrincipal => ctx.switchToHttp().getRequest().principal);
 export const CurrentStaff = createParamDecorator((_: unknown, ctx: ExecutionContext): StaffPrincipal => ctx.switchToHttp().getRequest().principal);
 
-export function permissionsFor(roles: StaffRole[]): Set<Permission> {
-  return new Set(roles.flatMap((r) => ROLE_PERMISSIONS[r]));
+const KNOWN = new Set<string>(ALL_PERMISSIONS);
+
+/** Union of the permissions of the given roles, read live from AccessRole (edits apply on the next request). */
+export async function permissionsFor(prisma: PrismaService, roles: string[]): Promise<Set<Permission>> {
+  if (!roles.length) return new Set();
+  const rows = await prisma.accessRole.findMany({ where: { key: { in: roles } }, select: { permissions: true } });
+  return new Set(rows.flatMap((r) => r.permissions).filter((p): p is Permission => KNOWN.has(p)));
 }
 
 @Injectable()
@@ -83,7 +88,7 @@ export class AuthGuard implements CanActivate {
     if (!s?.active) throw new DomainError('UNAUTHENTICATED', 'Account inactive', HttpStatus.UNAUTHORIZED);
     // Password change, 2FA reset or deactivation bumps sessionVersion: older tokens die immediately.
     if (payload.sv !== s.sessionVersion) throw new DomainError('UNAUTHENTICATED', 'Session ended. Sign in again.', HttpStatus.UNAUTHORIZED);
-    const permissions = permissionsFor(s.roles);
+    const permissions = await permissionsFor(this.prisma, s.roles);
     const missing = meta.permissions.filter((p) => !permissions.has(p));
     if (missing.length) throw new DomainError('FORBIDDEN', `Missing permission: ${missing.join(', ')}`, HttpStatus.FORBIDDEN);
     req.principal = { kind: 'staff', id: s.id, roles: s.roles, permissions } satisfies StaffPrincipal;

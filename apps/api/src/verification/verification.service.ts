@@ -3,7 +3,9 @@ import type { VerificationDecisionInput } from '@amico/contracts';
 import { PrismaService, type Tx } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 import { JobsService } from '../jobs/jobs.service';
-import { LedgerService, NotificationService } from '../ledger/ledger.service';
+import { LedgerService } from '../ledger/ledger.service';
+import { NotificationService } from '../messaging/notifications.service';
+import { CancellationService } from '../refunds/cancellation.service';
 import { TransactionStateService } from '../transactions/state.service';
 import { sourceReceived } from '../ledger/postings';
 import { Conflict, DomainError, Forbidden, NotFound } from '../common/errors';
@@ -27,6 +29,7 @@ export class VerificationService {
     private readonly ledger: LedgerService,
     private readonly notifications: NotificationService,
     private readonly state: TransactionStateService,
+    private readonly cancellation: CancellationService,
   ) {}
 
   queue(status: string[]) {
@@ -62,7 +65,7 @@ export class VerificationService {
       if (input.decision === 'NOT_RECEIVED') {
         await tx.manualVerification.update({ where: { id }, data: { status: 'REJECTED', reason: input.reason, firstReviewerId: staffId, firstReviewedAt: new Date() } });
         await this.state.transition(tx, { transactionId: txn.id, to: 'REJECTED', actor, reason: `Airtime not received: ${input.reason}`, locked: txn });
-        await this.notifications.notify(tx, { customerId: txn.customerId, transactionId: txn.id, kind: 'REJECTED', title: 'Transfer not received', body: `We could not find your airtime transfer for ${txn.reference}. Contact support if you sent it.` });
+        await this.notifications.notify(tx, { customerId: txn.customerId, transactionId: txn.id, kind: 'NOT_RECEIVED', params: { ref: txn.reference } });
         await this.log(tx, staffId, 'verification.not_received', mv, { reason: input.reason });
         return 'REJECTED' as const;
       }
@@ -92,9 +95,9 @@ export class VerificationService {
       }
 
       await tx.manualVerification.update({ where: { id }, data: { ...base, status: 'CONFIRMED' } });
-      await this.markSourceVerified(tx, txn, staffId, input.evidenceNote);
+      const paidOut = await this.markSourceVerified(tx, txn, staffId, input.evidenceNote);
       await this.log(tx, staffId, 'verification.confirm', mv, base);
-      return 'CONFIRMED' as const;
+      return paidOut ? ('CONFIRMED' as const) : ('CANCELLED' as const);
     });
 
     if (outcome === 'CONFIRMED') await this.enqueuePayout(id);
@@ -116,9 +119,9 @@ export class VerificationService {
         return 'ON_HOLD' as const;
       }
       await tx.manualVerification.update({ where: { id }, data: { status: 'CONFIRMED', secondApproverId: staffId, secondApprovedAt: new Date() } });
-      await this.markSourceVerified(tx, txn, staffId, input.evidenceNote);
+      const paidOut = await this.markSourceVerified(tx, txn, staffId, input.evidenceNote);
       await this.log(tx, staffId, 'verification.second_approval', mv, input);
-      return 'CONFIRMED' as const;
+      return paidOut ? ('CONFIRMED' as const) : ('CANCELLED' as const);
     });
     if (outcome === 'CONFIRMED') await this.enqueuePayout(id);
     return this.detail(id);
@@ -135,15 +138,18 @@ export class VerificationService {
     return tx.manualVerification.findUniqueOrThrow({ where: { id } });
   }
 
-  private async markSourceVerified(tx: Tx, txn: Transaction, staffId: string, evidenceNote: string) {
+  /** Returns false when the customer had cancelled: a refund (minus fee) was opened instead of a payout. */
+  private async markSourceVerified(tx: Tx, txn: Transaction, staffId: string, evidenceNote: string): Promise<boolean> {
     if (!['AWAITING_MANUAL_VERIFICATION', 'UNDER_REVIEW'].includes(txn.state)) throw new DomainError('STATE_CHANGED', `Transaction is ${txn.state}`);
     const service = await tx.service.findUniqueOrThrow({ where: { id: txn.serviceId } });
-    await this.state.transition(tx, { transactionId: txn.id, to: 'SOURCE_VERIFIED', actor: { type: 'STAFF', id: staffId }, locked: txn, reason: 'Airtime receipt verified on receiving SIM', metadata: { evidenceNote } });
+    const verified = await this.state.transition(tx, { transactionId: txn.id, to: 'SOURCE_VERIFIED', actor: { type: 'STAFF', id: staffId }, locked: txn, reason: 'Airtime receipt verified on receiving SIM', metadata: { evidenceNote } });
     await this.ledger.post(tx, {
       book: txn.isSimulated ? 'SIMULATED' : 'REAL', kind: 'SOURCE_RECEIVED', transactionId: txn.id, createdById: staffId,
       memo: `Manual airtime receipt verified`, lines: sourceReceived({ sourceAsset: service.sourceAsset, customerPays: txn.customerPays }),
     });
-    await this.notifications.notify(tx, { customerId: txn.customerId, transactionId: txn.id, kind: 'PAYMENT_CONFIRMED', title: 'Airtime received', body: `We confirmed your airtime transfer for ${txn.reference}. Processing your payout.` });
+    if (await this.cancellation.refundIfCancelled(tx, verified)) return false;
+    await this.notifications.notify(tx, { customerId: txn.customerId, transactionId: txn.id, kind: 'SOURCE_CONFIRMED', params: { ref: txn.reference, amount: txn.customerPays, sim: txn.isSimulated } });
+    return true;
   }
 
   private async enqueuePayout(verificationId: string) {

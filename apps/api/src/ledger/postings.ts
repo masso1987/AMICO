@@ -10,6 +10,7 @@ export type AccountCode =
   | 'CUSTOMER_PAYABLE'
   | 'PLATFORM_FEE_REVENUE'
   | 'CONVERSION_MARGIN'
+  | 'CANCELLATION_FEE_REVENUE'
   | 'PROVIDER_FEE_PAYABLE';
 
 export const ASSETS: readonly Asset[] = ['MTN_MOMO', 'ORANGE_MONEY', 'MTN_AIRTIME', 'ORANGE_AIRTIME', 'MTN_DATA', 'ORANGE_DATA'];
@@ -20,6 +21,7 @@ export const CHART_OF_ACCOUNTS: ReadonlyArray<{ code: AccountCode; name: string;
   { code: 'PROVIDER_FEE_PAYABLE', name: 'Provider fees collected, owed to providers', type: 'LIABILITY' },
   { code: 'PLATFORM_FEE_REVENUE', name: 'Platform fee revenue', type: 'REVENUE' },
   { code: 'CONVERSION_MARGIN', name: 'Conversion margin and rounding', type: 'REVENUE' },
+  { code: 'CANCELLATION_FEE_REVENUE', name: 'Cancellation fees kept', type: 'REVENUE' },
 ];
 
 export interface PostingLine {
@@ -76,6 +78,11 @@ export function payoutCompleted(t: {
 /** Refund returned to the customer's source account. */
 export function refundCompleted(t: { sourceAsset: Asset; amount: number }): PostingLine[] {
   return assertBalanced([dr('CUSTOMER_PAYABLE', t.amount), cr(`WALLET:${t.sourceAsset}`, t.amount)]);
+}
+
+/** A customer cancelled after paying: the fee we keep closes the rest of what we owed them. */
+export function cancellationFeeRetained(t: { fee: number }): PostingLine[] {
+  return assertBalanced([dr('CUSTOMER_PAYABLE', t.fee), cr('CANCELLATION_FEE_REVENUE', t.fee)]);
 }
 
 /** Mirror image of an earlier journal. Corrections never edit history. */

@@ -24,13 +24,15 @@ export function http(app: INestApplication) {
   return request(app.getHttpServer());
 }
 
-export function newPhone(): string {
+export function newPhone(network: 'MTN' | 'ORANGE' | 'ANY' = 'ANY'): string {
+  if (network === 'MTN') return `23767${String(randomInt(0, 10_000_000)).padStart(7, '0')}`;
+  if (network === 'ORANGE') return `23769${String(randomInt(0, 10_000_000)).padStart(7, '0')}`;
   return `2376${String(randomInt(0, 100_000_000)).padStart(8, '0')}`;
 }
 
-export async function customer(app: INestApplication) {
-  const phone = newPhone();
-  const res = await http(app).post('/auth/customer/register').send({ phone, fullName: 'Test Customer', password: 'a-long-password-1' }).expect(201);
+export async function customer(app: INestApplication, opts: { network?: 'MTN' | 'ORANGE' | 'ANY'; locale?: 'en' | 'fr' } = {}) {
+  const phone = newPhone(opts.network);
+  const res = await http(app).post('/auth/customer/register').send({ phone, fullName: 'Test Customer', password: 'a-long-password-1', locale: opts.locale ?? 'en' }).expect(201);
   return { phone, token: res.body.accessToken as string, auth: { Authorization: `Bearer ${res.body.accessToken}` } };
 }
 

@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   Headers,
+  HttpCode,
   HttpStatus,
   Inject,
   Param,
@@ -20,7 +21,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { CreateTransactionSchema, PaginationSchema, QuoteRequestSchema, SubmitSourceReferenceSchema, type CreateTransactionInput, type QuoteRequest, type SubmitSourceReferenceInput } from '@amico/contracts';
+import { CancelTransactionSchema, CreateTransactionSchema, PaginationSchema, QuoteRequestSchema, SubmitSourceReferenceSchema, type CancelTransactionInput, type CreateTransactionInput, type QuoteRequest, type SubmitSourceReferenceInput } from '@amico/contracts';
 import { ENV, type Env } from '../config/env';
 import { CurrentCustomer, CustomerAuth, type CustomerPrincipal } from '../auth/auth.guard';
 import { ZodPipe } from '../common/zod.pipe';
@@ -73,6 +74,14 @@ export class TransactionsController {
   @CustomerAuth()
   get(@Param('id', ParseUUIDPipe) id: string, @CurrentCustomer() c: CustomerPrincipal) {
     return this.transactions.present(id, c.id);
+  }
+
+  /** Free before payment; after payment the refund keeps the cancellation fee (see GET /public/config). */
+  @Post(':id/cancel')
+  @CustomerAuth()
+  @HttpCode(200)
+  cancel(@Param('id', ParseUUIDPipe) id: string, @Body(new ZodPipe(CancelTransactionSchema)) body: CancelTransactionInput, @CurrentCustomer() c: CustomerPrincipal) {
+    return this.transactions.cancel(c.id, id, body.reason);
   }
 
   @Post(':id/source-reference')

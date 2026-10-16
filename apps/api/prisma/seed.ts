@@ -11,7 +11,8 @@
  */
 import 'dotenv/config';
 import * as argon2 from 'argon2';
-import { maskMsisdn, ROUTE_DEFINITIONS, receivingSimOperator, ProviderCapability as Cap } from '@amico/contracts';
+import { maskMsisdn, ROUTE_DEFINITIONS, ROLE_PERMISSIONS, receivingSimOperator, routesInGroup, ProviderCapability as Cap, type StaffRole } from '@amico/contracts';
+import { MockProviderAdapter } from '@amico/providers';
 import { createPrismaClient } from '../src/prisma/client-factory';
 import { encrypt } from '../src/common/crypto';
 import { CHART_OF_ACCOUNTS } from '../src/ledger/postings';
@@ -42,8 +43,27 @@ const STAFF = [
 ] as const;
 
 const DEMO_ROUTES = ['MTN_MOMO__ORANGE_MONEY', 'ORANGE_MONEY__MTN_MOMO', 'MTN_AIRTIME__ORANGE_MONEY', 'MTN_MOMO__MTN_AIRTIME'];
+/** Extra demo routes priced the Switchn way: no platform fee on airtime and bundles, one buy-back rate for selling credit. */
+const DEMO_ZERO_FEE_ROUTES = [...routesInGroup('BUY_AIRTIME'), ...routesInGroup('BUNDLES'), ...routesInGroup('SELL_CREDIT')].filter((c) => !DEMO_ROUTES.includes(c));
+const DEMO_SELL_RATE_PPM = 850_000; // DEMO value: the real buy-back rate is set (and approved) in the admin.
+
+const ROLE_NAMES: Record<StaffRole, [string, string]> = {
+  ADMIN: ['Administrator', 'Services, SIMs, providers, staff, platform'],
+  FINANCE: ['Finance', 'Fees, refunds, reports'],
+  OPERATIONS: ['Operations', 'Airtime checks, second approvals, refund requests'],
+  SUPPORT: ['Support', 'Reads transactions'],
+};
 
 async function main() {
+  // ---- built-in roles (never overwrites permissions an administrator edited)
+  for (const key of Object.keys(ROLE_PERMISSIONS) as StaffRole[]) {
+    await prisma.accessRole.upsert({
+      where: { key },
+      update: {},
+      create: { key, name: ROLE_NAMES[key][0], description: ROLE_NAMES[key][1], permissions: [...ROLE_PERMISSIONS[key]], system: true },
+    });
+  }
+
   // ---- demo staff (SEED_DEMO only). Real accounts: `pnpm --filter @amico/api staff create-admin`.
   const password = env.SEED_STAFF_PASSWORD ?? 'ChangeMe!2026';
   const staffIds: Record<string, string> = {};
@@ -171,7 +191,81 @@ async function seedDemo(providerId: string, staff: Record<string, string>) {
       });
     }
   }
+  // Bundle delivery has no provider fee in the mock.
+  for (const operator of ['MTN', 'ORANGE'] as Operator[]) {
+    const exists = await prisma.providerFeeRule.findFirst({ where: { providerId, operator, capability: 'DATA_BUNDLE' } });
+    if (!exists) {
+      await prisma.providerFeeRule.create({
+        data: {
+          providerId, operator, capability: 'DATA_BUNDLE', version: 1, status: 'ACTIVE', feeType: 'FIXED', fixedFee: 0,
+          source: 'ESTIMATE', deductedAtSettlement: false, changeReason: 'Demo seed', createdById: maker, approvedById: checker, approvedAt: now,
+        },
+      });
+    }
+  }
+
+  for (const code of DEMO_ZERO_FEE_ROUTES) {
+    const service = await prisma.service.findUniqueOrThrow({ where: { code } });
+    const exists = await prisma.pricingRule.findFirst({ where: { serviceId: service.id } });
+    if (!exists) {
+      const sell = service.sourceAsset.endsWith('_AIRTIME');
+      const bundle = service.destinationAsset.endsWith('_DATA');
+      await prisma.pricingRule.create({
+        data: {
+          serviceId: service.id, version: 1, status: 'ACTIVE', feeType: 'FIXED', fixedFee: 0, minFee: 0,
+          minAmount: sell ? 1_000 : bundle ? 50 : 100, maxAmount: sell ? 500_000 : bundle ? 1_000_000 : 500_000,
+          deductionMethod: bundle ? 'ADD_TO_PAYMENT' : 'DEDUCT_FROM_DESTINATION',
+          conversionRatePpm: sell ? DEMO_SELL_RATE_PPM : 1_000_000,
+          effectiveFrom: now, changeReason: 'Demo seed (simulation): 1:1 for purchases, demo buy-back rate for selling credit',
+          createdById: maker, approvedById: checker, approvedAt: now,
+        },
+      });
+    }
+    await prisma.service.update({ where: { id: service.id }, data: { status: 'ENABLED', allowEstimatedProviderFee: true } });
+  }
   await prisma.service.updateMany({ where: { code: { in: DEMO_ROUTES } }, data: { allowEstimatedProviderFee: true } });
+
+  // Demo bundle catalogue straight from the mock provider (names say "simulated").
+  const mock = new MockProviderAdapter();
+  for (const operator of ['MTN', 'ORANGE'] as Operator[]) {
+    for (const b of await mock.listBundles(operator)) {
+      await prisma.bundle.upsert({
+        where: { providerCode_productId: { providerCode: 'MOCK', productId: b.productId } },
+        update: {},
+        create: {
+          operator, providerCode: 'MOCK', productId: b.productId, name: b.name, category: b.category, validity: b.validity, validityDays: b.validityDays,
+          price: b.price, dataMb: b.dataMb ?? null, voiceMinutes: b.voiceMinutes ?? null, smsCount: b.smsCount ?? null, source: 'PROVIDER',
+          featured: b.productId.endsWith('W2G'), lastSyncedAt: now,
+          nameFr: b.name.replace('Day', 'Jour').replace('Week', 'Semaine').replace('Month', 'Mois').replace('calls', 'appels').replace('(simulated)', '(simulé)'),
+        },
+      });
+    }
+  }
+
+  // Two showcase offers, clearly marked as demo content.
+  if ((await prisma.offer.count()) === 0) {
+    await prisma.offer.createMany({
+      data: [
+        {
+          titleEn: 'Weekly 2 GB on MTN', titleFr: '2 Go la semaine sur MTN', bodyEn: 'Demo offer — pay with MoMo or Orange Money.', bodyFr: 'Offre de démonstration — payez avec MoMo ou Orange Money.',
+          operator: 'MTN', badgeEn: 'Popular', badgeFr: 'Populaire', ctaKind: 'SERVICE', ctaTarget: 'BUNDLES', sortOrder: 1, createdById: checker,
+        },
+        {
+          titleEn: 'Sell your airtime', titleFr: 'Revendez votre crédit', bodyEn: 'Demo offer — turn spare MTN or Orange airtime into Mobile Money.', bodyFr: 'Offre de démonstration — transformez votre crédit MTN ou Orange en Mobile Money.',
+          operator: null, badgeEn: 'New', badgeFr: 'Nouveau', ctaKind: 'SERVICE', ctaTarget: 'SELL_CREDIT', sortOrder: 2, createdById: checker,
+        },
+      ],
+    });
+  }
+
+  // Message gateways in TEST mode: messages are logged, nothing is sent.
+  for (const [channel, driver] of [['SMS_MTN', 'MTN_SMS_V3'], ['SMS_ORANGE', 'ORANGE_SMS_API'], ['WHATSAPP', 'WHATSAPP_CLOUD']] as const) {
+    await prisma.messagingChannel.upsert({
+      where: { channel },
+      update: {},
+      create: { channel, driver, enabled: true, live: false, settings: channel === 'WHATSAPP' ? { phoneNumberId: '000000000000000' } : {} },
+    });
+  }
 }
 
 main()

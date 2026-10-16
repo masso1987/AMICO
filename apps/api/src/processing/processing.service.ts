@@ -5,8 +5,13 @@ import { PrismaService, type Tx } from '../prisma/prisma.service';
 import { CapabilityService } from '../providers/providers.module';
 import { JobsService, type JobData, type JobName } from '../jobs/jobs.service';
 import { TransactionStateService } from '../transactions/state.service';
-import { LedgerService, NotificationService } from '../ledger/ledger.service';
-import { payoutCompleted, refundCompleted, sourceReceived } from '../ledger/postings';
+import { LedgerService } from '../ledger/ledger.service';
+import { NotificationService } from '../messaging/notifications.service';
+import { SettingsService } from '../settings/settings.module';
+import { AuditService } from '../audit/audit.service';
+import { openRefund } from '../refunds/open-refund';
+import { CancellationService } from '../refunds/cancellation.service';
+import { cancellationFeeRetained, payoutCompleted, refundCompleted, sourceReceived } from '../ledger/postings';
 import type { OperationKind, ProviderOperation, Service, Transaction } from '../generated/prisma/client';
 
 const SYSTEM = { type: 'SYSTEM' as const };
@@ -41,10 +46,13 @@ export class ProcessingService implements OnModuleInit {
     private readonly state: TransactionStateService,
     private readonly ledger: LedgerService,
     private readonly notifications: NotificationService,
+    private readonly settings: SettingsService,
+    private readonly audit: AuditService,
+    private readonly cancellation: CancellationService,
   ) {}
 
   onModuleInit() {
-    this.jobs.registerHandler((name, data) => this.handle(name, data));
+    this.jobs.registerHandler(['collect', 'payout', 'status', 'refund'], (name, data) => this.handle(name, data));
   }
 
   async handle(name: JobName, data: JobData): Promise<void> {
@@ -57,6 +65,8 @@ export class ProcessingService implements OnModuleInit {
         return this.checkStatus(data.operationId!);
       case 'refund':
         return this.executeRefund(data.refundId!);
+      default:
+        throw new Error(`ProcessingService does not handle ${name}`);
     }
   }
 
@@ -86,8 +96,10 @@ export class ProcessingService implements OnModuleInit {
   // ---------------------------------------------------------------- payout / delivery
 
   async payout(transactionId: string): Promise<void> {
-    const txn = await this.prisma.transaction.findUniqueOrThrow({ where: { id: transactionId }, include: { service: true } });
+    const txn = await this.prisma.transaction.findUniqueOrThrow({ where: { id: transactionId }, include: { service: true, bundle: true } });
     if (txn.state !== 'SOURCE_VERIFIED') return;
+    // The customer cancelled while we were confirming their payment: refund instead of delivering.
+    if (txn.cancelRequestedAt) return;
     const dest = ASSET_META[txn.service.destinationAsset];
     const { kind, capability } = deliveryKind(txn.service);
     const adapter = await this.adapter(txn, { operator: dest.operator, capability });
@@ -113,7 +125,11 @@ export class ProcessingService implements OnModuleInit {
 
     const req = { idempotencyKey: op.idempotencyKey, operator: dest.operator, msisdn: txn.recipientMsisdn, amount: txn.payoutInstructionAmount, narrative: `AMICO ${txn.reference}` };
     const result = await this.call(() =>
-      kind === 'DISBURSE' ? adapter.disburse(req) : kind === 'AIRTIME_TOPUP' ? adapter.topUpAirtime(req) : adapter.buyDataBundle({ ...req, bundleCode: `AMOUNT_${req.amount}` }),
+      kind === 'DISBURSE'
+        ? adapter.disburse(req)
+        : kind === 'AIRTIME_TOPUP'
+          ? adapter.topUpAirtime(req)
+          : adapter.buyDataBundle({ ...req, bundleCode: txn.bundle?.productId ?? `AMOUNT_${req.amount}` }),
     );
     await this.recordInitial(op, result);
   }
@@ -184,15 +200,17 @@ export class ProcessingService implements OnModuleInit {
 
       if (op.kind === 'COLLECT') {
         if (txn.state !== 'PAYMENT_PROCESSING' && txn.state !== 'UNDER_REVIEW') return false;
-        await this.state.transition(tx, { transactionId: txn.id, to: 'SOURCE_VERIFIED', actor: { type: 'PROVIDER' }, reason: 'Collection confirmed by status query', locked: txn, metadata: { operationId: op.id, providerReference: op.providerReference } });
+        const verified = await this.state.transition(tx, { transactionId: txn.id, to: 'SOURCE_VERIFIED', actor: { type: 'PROVIDER' }, reason: 'Collection confirmed by status query', locked: txn, metadata: { operationId: op.id, providerReference: op.providerReference } });
         await this.ledger.post(tx, { book, kind: 'SOURCE_RECEIVED', transactionId: txn.id, memo: `Collection ${op.providerReference}`, lines: sourceReceived({ sourceAsset: service.sourceAsset, customerPays: txn.customerPays }) });
-        await this.notifications.notify(tx, { customerId: txn.customerId, transactionId: txn.id, kind: 'PAYMENT_CONFIRMED', title: 'Payment received', body: `We received ${txn.customerPays} FCFA for ${txn.reference}.` });
+        // Cancelled while the payment was in flight: refund (minus fee) instead of delivering.
+        if (await this.cancellation.refundIfCancelled(tx, verified)) return false;
+        await this.notifications.notify(tx, { customerId: txn.customerId, transactionId: txn.id, kind: 'PAYMENT_CONFIRMED', params: { ref: txn.reference, amount: txn.customerPays, sim: txn.isSimulated } });
         return true;
       } else if (op.kind === 'REFUND') {
         const refund = await tx.refund.findFirst({ where: { transactionId: txn.id, status: 'PROCESSING' } });
         if (!refund || txn.state !== 'REFUND_PENDING') return false;
         await tx.refund.update({ where: { id: refund.id }, data: { status: 'COMPLETED' } });
-        await this.completeRefund(tx, txn, service, refund.amount, { type: 'PROVIDER' });
+        await this.completeRefund(tx, txn, service, refund, { type: 'PROVIDER' });
         return false;
       } else {
         if (txn.state === 'COMPLETED') return false;
@@ -210,8 +228,8 @@ export class ProcessingService implements OnModuleInit {
           }),
         });
         await this.notifications.notify(tx, {
-          customerId: txn.customerId, transactionId: txn.id, kind: 'COMPLETED', title: txn.isSimulated ? 'SIMULATION — transfer completed' : 'Transfer completed',
-          body: `${txn.expectedDelivered} FCFA delivered to ${txn.recipientMsisdn}. Reference ${txn.reference}.${txn.isSimulated ? ' This was a simulation: no real money moved.' : ''}`,
+          customerId: txn.customerId, transactionId: txn.id, kind: txn.bundleId ? 'BUNDLE_COMPLETED' : 'COMPLETED',
+          params: { ref: txn.reference, delivered: txn.expectedDelivered, to: txn.recipientMsisdn, sim: txn.isSimulated },
         });
         return false;
       }
@@ -227,14 +245,20 @@ export class ProcessingService implements OnModuleInit {
       if (op.kind === 'COLLECT') {
         if (txn.state === 'PAYMENT_PROCESSING' || txn.state === 'UNDER_REVIEW') {
           await this.state.transition(tx, { transactionId: txn.id, to: 'REJECTED', actor: { type: 'PROVIDER' }, reason: `Collection failed: ${reason}`, locked: txn });
-          await this.notifications.notify(tx, { customerId: txn.customerId, transactionId: txn.id, kind: 'REJECTED', title: 'Payment not completed', body: `Your payment for ${txn.reference} did not go through. No money was taken.` });
+          await this.notifications.notify(tx, { customerId: txn.customerId, transactionId: txn.id, kind: 'REJECTED', params: { ref: txn.reference } });
         }
       } else if (op.kind === 'REFUND') {
         await tx.refund.updateMany({ where: { transactionId: txn.id, status: 'PROCESSING' }, data: { status: 'FAILED' } });
         if (txn.state === 'REFUND_PENDING') await this.state.transition(tx, { transactionId: txn.id, to: 'UNDER_REVIEW', actor: { type: 'PROVIDER' }, reason: `Refund failed: ${reason}`, locked: txn });
       } else if (['PAYOUT_PROCESSING', 'DELIVERY_PENDING', 'UNDER_REVIEW'].includes(txn.state)) {
-        await this.state.transition(tx, { transactionId: txn.id, to: 'FAILED', actor: { type: 'PROVIDER' }, reason: `Delivery failed: ${reason}`, locked: txn });
-        await this.notifications.notify(tx, { customerId: txn.customerId, transactionId: txn.id, kind: 'FAILED', title: 'Delivery failed', body: `Delivery for ${txn.reference} failed. Our team will refund or retry it.` });
+        const failed = await this.state.transition(tx, { transactionId: txn.id, to: 'FAILED', actor: { type: 'PROVIDER' }, reason: `Delivery failed: ${reason}`, locked: txn });
+        await this.notifications.notify(tx, { customerId: txn.customerId, transactionId: txn.id, kind: 'FAILED', params: { ref: txn.reference } });
+        // Switchn-style guarantee: a failed delivery is refunded in full. A person still approves the payout of the refund.
+        if ((await this.settings.get('refunds')).autoRequestOnFailure) {
+          await openRefund(tx, { state: this.state, audit: this.audit }, {
+            txn: failed, kind: 'FAILURE', amount: txn.customerPays, reason: `Automatic full refund: delivery failed (${reason})`, requestedById: 'SYSTEM', allowedFrom: ['FAILED'],
+          });
+        }
       }
     });
   }
@@ -252,33 +276,39 @@ export class ProcessingService implements OnModuleInit {
     });
   }
 
-  async completeRefund(tx: Tx, txn: Transaction, service: Service, amount: number, actor: { type: 'PROVIDER' | 'STAFF'; id?: string }) {
+  async completeRefund(tx: Tx, txn: Transaction, service: Service, refund: { amount: number; feeRetained: number }, actor: { type: 'PROVIDER' | 'STAFF'; id?: string }) {
+    const book = txn.isSimulated ? 'SIMULATED' : 'REAL';
     await this.state.transition(tx, { transactionId: txn.id, to: 'REFUNDED', actor, reason: 'Refund completed', locked: txn });
-    await this.ledger.post(tx, { book: txn.isSimulated ? 'SIMULATED' : 'REAL', kind: 'REFUND_COMPLETED', transactionId: txn.id, memo: `Refund ${txn.reference}`, lines: refundCompleted({ sourceAsset: service.sourceAsset, amount }), createdById: actor.id ?? null });
-    await this.notifications.notify(tx, { customerId: txn.customerId, transactionId: txn.id, kind: 'REFUNDED', title: 'Refund completed', body: `${amount} FCFA was refunded for ${txn.reference}.` });
+    await this.ledger.post(tx, { book, kind: 'REFUND_COMPLETED', transactionId: txn.id, memo: `Refund ${txn.reference}`, lines: refundCompleted({ sourceAsset: service.sourceAsset, amount: refund.amount }), createdById: actor.id ?? null });
+    if (refund.feeRetained > 0) {
+      await this.ledger.post(tx, { book, kind: 'CANCELLATION_FEE', transactionId: txn.id, memo: `Cancellation fee ${txn.reference}`, lines: cancellationFeeRetained({ fee: refund.feeRetained }), createdById: actor.id ?? null });
+    }
+    await this.notifications.notify(tx, { customerId: txn.customerId, transactionId: txn.id, kind: 'REFUNDED', params: { ref: txn.reference, amount: refund.amount, sim: txn.isSimulated } });
   }
 
   // ---------------------------------------------------------------- helpers
 
-  private async recordInitial(op: ProviderOperation, result: OperationResult) {
+  private async recordInitial(op: ProviderOperation, result: OperationResult & { durationMs?: number }) {
     if (result.status === 'FAILED') {
+      if (result.durationMs !== undefined) await this.prisma.providerOperation.update({ where: { id: op.id }, data: { durationMs: result.durationMs } });
       await this.onConfirmedFailure(op, result.failureReason ?? 'Provider declined');
       return;
     }
     await this.prisma.providerOperation.update({
       where: { id: op.id },
       // Even a synchronous SUCCEEDED is held as PENDING until a status query confirms it.
-      data: { status: result.status === 'SUCCEEDED' ? 'PENDING' : result.status, providerReference: result.providerReference },
+      data: { status: result.status === 'SUCCEEDED' ? 'PENDING' : result.status, providerReference: result.providerReference, durationMs: result.durationMs ?? null },
     });
     await this.jobs.enqueue('status', { operationId: op.id }, { jobId: `status:${op.id}:0`, delayMs: result.status === 'SUCCEEDED' ? 0 : backoffMs(0) });
   }
 
   /** Any thrown error from a provider call is an UNKNOWN outcome, never a failure. */
-  private async call(fn: () => Promise<OperationResult>): Promise<OperationResult> {
+  private async call(fn: () => Promise<OperationResult>): Promise<OperationResult & { durationMs: number }> {
+    const started = Date.now();
     try {
-      return await fn();
+      return { ...(await fn()), durationMs: Date.now() - started };
     } catch (e) {
-      return { status: 'UNKNOWN', providerReference: null, failureReason: (e as Error).message, simulated: false };
+      return { status: 'UNKNOWN', providerReference: null, failureReason: (e as Error).message, simulated: false, durationMs: Date.now() - started };
     }
   }
 

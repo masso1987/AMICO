@@ -14,6 +14,14 @@ import {
   findRoute,
   VerificationDecisionSchema,
   IllegalTransitionError,
+  productGroupOf,
+  routesInGroup,
+  operatorOfMsisdn,
+  QuoteRequestSchema,
+  ALL_PERMISSIONS,
+  PERMISSION_INFO,
+  ADMIN_LOCKED_PERMISSIONS,
+  ROLE_PERMISSIONS,
 } from '../src';
 
 const ALL = Object.values(TransactionState);
@@ -79,9 +87,9 @@ describe('state machine', () => {
 });
 
 describe('route catalogue', () => {
-  it('has the 12 exchange routes plus 2 data bundle routes, with unique codes', () => {
-    expect(ROUTE_DEFINITIONS).toHaveLength(14);
-    expect(new Set(ROUTE_DEFINITIONS.map((r) => r.code)).size).toBe(14);
+  it('has the 12 exchange routes plus 4 data bundle routes, with unique codes', () => {
+    expect(ROUTE_DEFINITIONS).toHaveLength(16);
+    expect(new Set(ROUTE_DEFINITIONS.map((r) => r.code)).size).toBe(16);
   });
 
   it('every airtime-source route is manual and HIGH risk', () => {
@@ -140,5 +148,44 @@ describe('schemas', () => {
     };
     expect(ProviderFeeRuleDraftSchema.safeParse(base).success).toBe(false);
     expect(ProviderFeeRuleDraftSchema.safeParse({ ...base, evidenceReference: 'Contract annex 2' }).success).toBe(true);
+  });
+});
+
+describe('products and number plan', () => {
+  it('puts every route in exactly one product group', () => {
+    const groups = ROUTE_DEFINITIONS.map((r) => productGroupOf(r));
+    expect(groups.filter((g) => g === 'SELL_CREDIT')).toHaveLength(4);
+    expect(groups.filter((g) => g === 'BUNDLES')).toHaveLength(4);
+    expect(groups.filter((g) => g === 'BUY_AIRTIME')).toHaveLength(4);
+    expect(groups.filter((g) => g === 'AIRTIME_SWAP')).toHaveLength(2);
+    expect(groups.filter((g) => g === 'MONEY_EXCHANGE')).toHaveLength(2);
+    expect(routesInGroup('SELL_CREDIT').sort()).toEqual(['MTN_AIRTIME__MTN_MOMO', 'MTN_AIRTIME__ORANGE_MONEY', 'ORANGE_AIRTIME__MTN_MOMO', 'ORANGE_AIRTIME__ORANGE_MONEY']);
+  });
+
+  it('detects the network from the number, longest prefix first', () => {
+    expect(operatorOfMsisdn('237677123456')).toBe('MTN');
+    expect(operatorOfMsisdn('237650123456')).toBe('MTN');
+    expect(operatorOfMsisdn('237699123456')).toBe('ORANGE');
+    expect(operatorOfMsisdn('237655123456')).toBe('ORANGE');
+    expect(operatorOfMsisdn('237620123456')).toBeNull(); // CAMTEL: not served yet
+    expect(operatorOfMsisdn('237699123456', { MTN: ['699'], ORANGE: ['69'] })).toBe('MTN');
+  });
+
+  it('a cancelled verified transaction may go to refund, never straight to completion', () => {
+    expect(canTransition('SOURCE_VERIFIED', 'REFUND_PENDING')).toBe(true);
+    expect(canTransition('SOURCE_VERIFIED', 'COMPLETED')).toBe(false);
+  });
+
+  it('quote requests take an amount or a bundle, not both', () => {
+    const base = { serviceCode: 'MTN_MOMO__MTN_DATA', recipientMsisdn: '677123456', senderMsisdn: '677123456' };
+    expect(QuoteRequestSchema.safeParse({ ...base, amount: 1000 }).success).toBe(true);
+    expect(QuoteRequestSchema.safeParse({ ...base, bundleId: '7f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b' }).success).toBe(true);
+    expect(QuoteRequestSchema.safeParse({ ...base, amount: 1000, bundleId: '7f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b' }).success).toBe(false);
+    expect(QuoteRequestSchema.safeParse(base).success).toBe(false);
+  });
+
+  it('every permission has bilingual labels and the admin keeps access management', () => {
+    for (const p of ALL_PERMISSIONS) expect(PERMISSION_INFO[p].fr.length).toBeGreaterThan(3);
+    for (const p of ADMIN_LOCKED_PERMISSIONS) expect(ROLE_PERMISSIONS.ADMIN).toContain(p);
   });
 });

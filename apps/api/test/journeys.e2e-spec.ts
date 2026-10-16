@@ -103,34 +103,50 @@ describe('API route: MoMo → Orange Money (mock provider)', () => {
     expect(again.body.code).toBe('QUOTE_ALREADY_USED');
   });
 
-  it('a definitive payout failure ends FAILED with the slot released, then refunds through maker-checker', async () => {
+  it('a definitive payout failure ends FAILED with the slot released and a 100% refund opened automatically', async () => {
     const c = await customer(app);
     const amount = amountWithPayoutTail(13);
     const q = await quote(app, c, 'MTN_MOMO__ORANGE_MONEY', amount);
     const t = await accept(app, c, q.body.id).then(created);
-    expect(await txState(prisma, t.body.id)).toBe('FAILED');
+    expect(await txState(prisma, t.body.id)).toBe('REFUND_PENDING');
+    const states = (await prisma.transactionStateHistory.findMany({ where: { transactionId: t.body.id }, orderBy: { createdAt: 'asc' } })).map((h) => h.toState);
+    expect(states).toContain('FAILED');
     const ops = await prisma.providerOperation.findMany({ where: { transactionId: t.body.id, kind: 'DISBURSE' } });
     expect(ops).toHaveLength(1);
     expect(ops[0]).toMatchObject({ status: 'FAILED', payoutSlot: null });
 
-    const r = await http(app).post(`/admin/transactions/${t.body.id}/refunds`).set(finance).send({ reason: 'Payout declined by provider' }).expect(201);
-    // Requester cannot approve their own refund.
-    await http(app).post(`/admin/refunds/${r.body.id}/approve`).set(finance).expect(403);
-    // Operations can request but not approve.
-    await http(app).post(`/admin/refunds/${r.body.id}/approve`).set(ops1).expect(403);
-    const finance2 = admin; // admin lacks REFUND_APPROVE
-    await http(app).post(`/admin/refunds/${r.body.id}/approve`).set(finance2).expect(403);
-    // A second finance user approves.
-    await prisma.staffUser.upsert({
-      where: { email: 'finance2@amico.local' },
-      update: {},
-      create: { email: 'finance2@amico.local', fullName: 'Finance 2', roles: ['FINANCE'], passwordHash: (await prisma.staffUser.findUniqueOrThrow({ where: { email: 'finance@amico.local' } })).passwordHash },
-    });
-    const f2 = await staff(app, 'finance2@amico.local');
-    await http(app).post(`/admin/refunds/${r.body.id}/approve`).set(f2).expect(201);
+    const refund = await prisma.refund.findFirstOrThrow({ where: { transactionId: t.body.id } });
+    expect(refund).toMatchObject({ kind: 'FAILURE', amount: q.body.totalPayable, feeRetained: 0, requestedById: 'SYSTEM', status: 'REQUESTED' });
+    // Operations can request refunds but not approve them; finance approves the automatic one.
+    await http(app).post(`/admin/refunds/${refund.id}/approve`).set(ops1).expect(403);
+    await http(app).post(`/admin/refunds/${refund.id}/approve`).set(finance).expect(201);
     expect(await txState(prisma, t.body.id)).toBe('REFUNDED');
     const kinds = (await prisma.ledgerJournal.findMany({ where: { transactionId: t.body.id } })).map((j) => j.kind).sort();
     expect(kinds).toEqual(['REFUND_COMPLETED', 'SOURCE_RECEIVED']);
+  });
+
+  it('with automatic refunds switched off, a staff refund still needs a second person (maker-checker)', async () => {
+    await http(app).patch('/admin/settings/refunds').set(admin).send({ value: { autoRequestOnFailure: false }, reason: 'Test: manual refunds' }).expect(200);
+    try {
+      const c = await customer(app);
+      const q = await quote(app, c, 'MTN_MOMO__ORANGE_MONEY', amountWithPayoutTail(13));
+      const t = await accept(app, c, q.body.id).then(created);
+      expect(await txState(prisma, t.body.id)).toBe('FAILED');
+      const r = await http(app).post(`/admin/transactions/${t.body.id}/refunds`).set(finance).send({ reason: 'Payout declined by provider' }).expect(201);
+      // Requester cannot approve their own refund.
+      await http(app).post(`/admin/refunds/${r.body.id}/approve`).set(finance).expect(403);
+      await http(app).post(`/admin/refunds/${r.body.id}/approve`).set(admin).expect(403); // admin lacks REFUND_APPROVE
+      await prisma.staffUser.upsert({
+        where: { email: 'finance2@amico.local' },
+        update: {},
+        create: { email: 'finance2@amico.local', fullName: 'Finance 2', roles: ['FINANCE'], passwordHash: (await prisma.staffUser.findUniqueOrThrow({ where: { email: 'finance@amico.local' } })).passwordHash },
+      });
+      const f2 = await staff(app, 'finance2@amico.local');
+      await http(app).post(`/admin/refunds/${r.body.id}/approve`).set(f2).expect(201);
+      expect(await txState(prisma, t.body.id)).toBe('REFUNDED');
+    } finally {
+      await http(app).patch('/admin/settings/refunds').set(admin).send({ value: { autoRequestOnFailure: true }, reason: 'Test: restore default' }).expect(200);
+    }
   });
 
   it('an uncertain payout is status-queried, never retried blindly (…17 resolves to success)', async () => {
@@ -141,11 +157,12 @@ describe('API route: MoMo → Orange Money (mock provider)', () => {
     expect(await prisma.providerOperation.count({ where: { transactionId: t.body.id, kind: 'DISBURSE' } })).toBe(1);
   });
 
-  it('an uncertain payout that resolves to failure (…19) ends FAILED', async () => {
+  it('an uncertain payout that resolves to failure (…19) fails and goes to a full refund', async () => {
     const c = await customer(app);
     const q = await quote(app, c, 'MTN_MOMO__ORANGE_MONEY', amountWithPayoutTail(19));
     const t = await accept(app, c, q.body.id);
-    expect(await txState(prisma, t.body.id)).toBe('FAILED');
+    expect(await txState(prisma, t.body.id)).toBe('REFUND_PENDING');
+    expect(await prisma.refund.count({ where: { transactionId: t.body.id, kind: 'FAILURE' } })).toBe(1);
   });
 
   it('an outcome that never resolves (…29) escalates to UNDER_REVIEW and blocks refunds', async () => {

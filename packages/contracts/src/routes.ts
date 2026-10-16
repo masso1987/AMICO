@@ -52,7 +52,7 @@ function manualRoute(source: Asset, destination: Asset, deliver: ProviderCapabil
 const AIRTIME_NOTE =
   'Needs: operator terms allowing commercial use of received airtime (B2), licensing (B3), staff visibility of incoming transfers (B5), verified conversion rate (B6).';
 
-/** The 12 exchange routes plus bundle purchases. All are seeded DISABLED. */
+/** The 12 exchange routes plus 4 bundle purchase routes. All are seeded DISABLED. */
 export const ROUTE_DEFINITIONS: readonly RouteDefinition[] = [
   apiRoute('MTN_MOMO', 'ORANGE_MONEY', 'DISBURSE', 'MEDIUM', 'Needs MTN collection + Orange disbursement access, settlement float (B1, B4, B7).'),
   apiRoute('ORANGE_MONEY', 'MTN_MOMO', 'DISBURSE', 'MEDIUM', 'Needs Orange collection + MTN disbursement access, settlement float (B1, B4, B7).'),
@@ -68,6 +68,8 @@ export const ROUTE_DEFINITIONS: readonly RouteDefinition[] = [
   apiRoute('ORANGE_MONEY', 'ORANGE_AIRTIME', 'AIRTIME_TOPUP', 'LOW_MEDIUM', 'Needs Orange collection + airtime vending access (B1, B7).'),
   apiRoute('MTN_MOMO', 'MTN_DATA', 'DATA_BUNDLE', 'LOW_MEDIUM', 'Data bundle purchase. Needs bundle catalogue API (B1, B7).'),
   apiRoute('ORANGE_MONEY', 'ORANGE_DATA', 'DATA_BUNDLE', 'LOW_MEDIUM', 'Data bundle purchase. Needs bundle catalogue API (B1, B7).'),
+  apiRoute('MTN_MOMO', 'ORANGE_DATA', 'DATA_BUNDLE', 'MEDIUM', 'Orange bundle paid with MTN MoMo. Needs MTN collection + Orange bundle API (B1, B4, B7).'),
+  apiRoute('ORANGE_MONEY', 'MTN_DATA', 'DATA_BUNDLE', 'MEDIUM', 'MTN bundle paid with Orange Money. Needs Orange collection + MTN bundle API (B1, B4, B7).'),
 ];
 
 export function findRoute(code: string): RouteDefinition | undefined {
