@@ -30,6 +30,8 @@ export default async function DashLayout({ children }: { children: React.ReactNo
     ...(can(staff, 'SIM_READ_MASKED') ? [{ href: '/providers', label: 'Providers', group: 'Configuration' }] : []),
     ...(can(staff, 'REPORT_READ') ? [{ href: '/reports', label: 'Reports', group: 'Finance' }] : []),
     ...(can(staff, 'AUDIT_READ') ? [{ href: '/audit', label: 'Audit log', group: 'Finance' }] : []),
+    ...(can(staff, 'STAFF_MANAGE') ? [{ href: '/staff', label: 'Staff accounts', group: 'People' }] : []),
+    { href: '/account', label: 'My account', group: 'People' },
   ];
 
   return (

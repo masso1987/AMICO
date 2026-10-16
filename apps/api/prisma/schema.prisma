@@ -193,8 +193,17 @@ model StaffUser {
   fullName     String
   passwordHash String
   roles        StaffRole[]
-  /// TOTP secret, encrypted with APP_ENCRYPTION_KEY. Enrolment flow lands in P1 hardening.
+  /// TOTP secret, AES-256-GCM encrypted with APP_ENCRYPTION_KEY. Set (pending) at first sign-in.
   totpSecretEncrypted String?
+  /// Set once the staff member has proved their authenticator works. Null = not enrolled.
+  totpEnabledAt       DateTime?
+  /// Last accepted TOTP time-step; a code can never be used twice.
+  totpLastStep        Int?
+  /// Temporary or reset passwords must be replaced at the next sign-in.
+  mustChangePassword  Boolean     @default(false)
+  /// Bumped on password change, 2FA reset or deactivation: older tokens stop working at once.
+  sessionVersion      Int         @default(0)
+  lastLoginAt         DateTime?
   active       Boolean     @default(true)
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt

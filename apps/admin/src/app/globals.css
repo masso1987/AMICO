@@ -683,3 +683,168 @@ select:focus {
   font-size: 20px;
   color: #8a5a17;
 }
+
+.login-title {
+  margin: -6px 0 2px;
+  font-size: 18px;
+}
+
+.login .lead {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.login .steps {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14px;
+  display: grid;
+  gap: 4px;
+}
+
+.login .qr {
+  width: 200px;
+  height: 200px;
+  margin: 2px auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.login .qr svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.login .manual {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.login .manual summary {
+  cursor: pointer;
+}
+
+.login .manual code {
+  display: block;
+  margin: 6px 0 2px;
+  padding: 8px;
+  background: var(--bg);
+  border-radius: 6px;
+  color: var(--ink);
+  word-break: break-all;
+  letter-spacing: 0.04em;
+}
+
+.otp {
+  font-size: 22px;
+  letter-spacing: 0.25em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.linkish {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+  justify-self: center;
+}
+
+/* ---------------------------------------------------------------- one-time password reveal */
+
+.secret-once {
+  border: 1px solid var(--gold);
+  background: var(--gold-soft);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: grid;
+  gap: 6px;
+}
+
+.secret-once code {
+  font-size: 18px;
+  letter-spacing: 0.06em;
+  color: var(--gold-ink);
+}
+
+/* ---------------------------------------------------------------- staff */
+
+.staff-list {
+  display: grid;
+}
+
+.staff-row {
+  border-top: 1px solid var(--line);
+}
+
+.staff-row:first-child {
+  border-top: 0;
+}
+
+.staff-row summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.8fr) minmax(0, 1.3fr);
+  gap: 12px;
+  align-items: center;
+  padding: 12px 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.staff-row summary::-webkit-details-marker {
+  display: none;
+}
+
+.staff-row.off summary strong {
+  color: var(--muted);
+}
+
+.staff-body {
+  padding: 0 0 16px;
+}
+
+fieldset.roles {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px 10px;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+}
+
+fieldset.roles legend {
+  font-size: 13px;
+  font-weight: 700;
+  padding: 0 4px;
+}
+
+fieldset.roles .check {
+  align-items: flex-start;
+  line-height: 1.35;
+}
+
+fieldset.roles .check input {
+  margin-top: 3px;
+}
+
+.grid-2 > .card + .card {
+  margin-top: 0;
+}
+
+@media (max-width: 720px) {
+  .staff-row summary {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .staff-row summary > span:last-child {
+    justify-content: flex-start !important;
+  }
+}

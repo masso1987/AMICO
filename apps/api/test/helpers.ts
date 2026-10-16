@@ -5,6 +5,8 @@ import { randomInt, randomUUID } from 'node:crypto';
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/bootstrap';
 import { PrismaService } from '../src/prisma/prisma.service';
+import { STEP_SECONDS, stepAt, totp } from '../src/auth/totp';
+import { decrypt } from '../src/common/crypto';
 
 export const STAFF_PASSWORD = 'Test-Password-2026';
 
@@ -32,9 +34,35 @@ export async function customer(app: INestApplication) {
   return { phone, token: res.body.accessToken as string, auth: { Authorization: `Bearer ${res.body.accessToken}` } };
 }
 
-export async function staff(app: INestApplication, email: string) {
-  const res = await http(app).post('/auth/staff/login').send({ email, password: STAFF_PASSWORD }).expect(200);
-  return { Authorization: `Bearer ${res.body.accessToken}` };
+/** Authenticator secrets the helper enrolled, and the last step it used (codes are single-use). */
+const authenticators = new Map<string, { secret: string; lastStep: number }>();
+
+/**
+ * Next unused code for an enrolled test account. The server accepts one step of
+ * drift and never the same step twice, so rapid repeat sign-ins wait for the clock.
+ */
+export async function nextCode(email: string): Promise<string> {
+  const a = authenticators.get(email);
+  if (!a) throw new Error(`no authenticator for ${email}`);
+  const step = Math.max(stepAt(Date.now()), a.lastStep + 1);
+  a.lastStep = step;
+  const waitMs = (step - 1) * STEP_SECONDS * 1000 - Date.now();
+  if (waitMs > 0) await new Promise((r) => setTimeout(r, waitMs + 50));
+  return totp(a.secret, step * STEP_SECONDS * 1000);
+}
+
+/** Full staff sign-in: password, then authenticator enrolment or code. Returns the Authorization header. */
+export async function staff(app: INestApplication, email: string, password = STAFF_PASSWORD) {
+  const first = await http(app).post('/auth/staff/login').send({ email, password }).expect(200);
+  if (first.body.next === 'TOTP_ENROLL') authenticators.set(email, { secret: first.body.secret, lastStep: -1 });
+  else if (!authenticators.has(email)) {
+    // Enrolled by another test file: read the secret (and last used step) the way a phone would have kept it.
+    const row = await app.get(PrismaService).staffUser.findUniqueOrThrow({ where: { email } });
+    authenticators.set(email, { secret: decrypt(row.totpSecretEncrypted!, process.env.APP_ENCRYPTION_KEY!), lastStep: row.totpLastStep ?? -1 });
+  }
+  const second = await http(app).post('/auth/staff/login/totp').send({ challenge: first.body.challenge, code: await nextCode(email) }).expect(200);
+  if (second.body.next !== 'DONE') throw new Error(`unexpected step ${second.body.next}`);
+  return { Authorization: `Bearer ${second.body.accessToken}` };
 }
 
 export async function quote(app: INestApplication, c: { phone: string; auth: Record<string, string> }, serviceCode: string, amount: number) {

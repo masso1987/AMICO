@@ -1,7 +1,6 @@
 import { Body, Controller, Get, Global, HttpCode, HttpStatus, Inject, Injectable, Module, Post } from '@nestjs/common';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { ApiTags } from '@nestjs/swagger';
-import { Throttle } from '@nestjs/throttler';
 import * as argon2 from 'argon2';
 import { z } from 'zod';
 import { Msisdn } from '@amico/contracts';
@@ -10,12 +9,12 @@ import { DomainError } from '../common/errors';
 import { ZodPipe } from '../common/zod.pipe';
 import { PrismaService } from '../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
-import { AuthGuard, CurrentCustomer, CurrentStaff, CustomerAuth, StaffAuth, type CustomerPrincipal, type StaffPrincipal } from './auth.guard';
+import { AuthGuard, CurrentCustomer, CustomerAuth, type CustomerPrincipal } from './auth.guard';
+import { LOGIN_LIMIT, StaffAuthController, StaffAuthService } from './staff-auth';
 
 const Password = z.string().min(10, 'Use at least 10 characters').max(200);
 const RegisterSchema = z.object({ phone: Msisdn, fullName: z.string().trim().min(2).max(120), password: Password });
 const CustomerLoginSchema = z.object({ phone: Msisdn, password: z.string().min(1).max(200) });
-const StaffLoginSchema = z.object({ email: z.string().email().toLowerCase(), password: z.string().min(1).max(200) });
 
 const INVALID = () => new DomainError('INVALID_CREDENTIALS', 'Invalid credentials', HttpStatus.UNAUTHORIZED);
 // Dummy hash so unknown accounts take as long as known ones.
@@ -52,22 +51,6 @@ export class AuthService {
     return { id: c.id, phone: c.phone, fullName: c.fullName, phoneVerified: c.phoneVerifiedAt !== null, createdAt: c.createdAt };
   }
 
-  staffProfile(staffId: string) {
-    return this.prisma.staffUser.findUniqueOrThrow({ where: { id: staffId }, select: { id: true, email: true, fullName: true } });
-  }
-
-  async loginStaff(input: z.infer<typeof StaffLoginSchema>, ip?: string) {
-    const s = await this.prisma.staffUser.findUnique({ where: { email: input.email } });
-    const ok = (await this.verify(s?.passwordHash, input.password)) && !!s?.active;
-    await this.audit.record({ actorType: 'STAFF', actorId: s?.id ?? null, action: ok ? 'staff.login' : 'staff.login_failed', entityType: 'StaffUser', entityId: s?.id ?? null, after: { email: input.email }, ip });
-    if (!ok || !s) throw INVALID();
-    // TODO(P1): TOTP second factor (totpSecretEncrypted) before issuing a token.
-    return {
-      accessToken: await this.jwt.signAsync({ sub: s.id, typ: 'staff' }, { expiresIn: this.env.JWT_STAFF_TTL as never }),
-      roles: s.roles,
-    };
-  }
-
   private async verify(hash: string | undefined, password: string): Promise<boolean> {
     if (!hash) {
       dummyHash ??= argon2.hash('not-a-real-password', { type: argon2.argon2id });
@@ -78,8 +61,6 @@ export class AuthService {
   }
 }
 
-/** Strict limit for credential endpoints only; profile endpoints use the normal per-user limit. */
-const LOGIN_LIMIT = Throttle({ default: { limit: 10, ttl: 60_000 } });
 
 @ApiTags('auth')
 @Controller('auth')
@@ -104,28 +85,13 @@ export class AuthController {
   me(@CurrentCustomer() c: CustomerPrincipal) {
     return this.auth.me(c.id);
   }
-
-  /** Who is signed in to the admin dashboard, and what they may do. */
-  @Get('staff/me')
-  @StaffAuth()
-  async staffMe(@CurrentStaff() s: StaffPrincipal) {
-    const row = await this.auth.staffProfile(s.id);
-    return { ...row, roles: s.roles, permissions: [...s.permissions].sort() };
-  }
-
-  @Post('staff/login')
-  @LOGIN_LIMIT
-  @HttpCode(200)
-  loginStaff(@Body(new ZodPipe(StaffLoginSchema)) body: z.infer<typeof StaffLoginSchema>) {
-    return this.auth.loginStaff(body);
-  }
 }
 
 @Global()
 @Module({
   imports: [JwtModule.registerAsync({ useFactory: () => ({ secret: loadEnv().JWT_SECRET }) })],
-  controllers: [AuthController],
-  providers: [AuthService, AuthGuard],
-  exports: [JwtModule, AuthGuard],
+  controllers: [AuthController, StaffAuthController],
+  providers: [AuthService, StaffAuthService, AuthGuard],
+  exports: [JwtModule, AuthGuard, StaffAuthService],
 })
 export class AuthModule {}

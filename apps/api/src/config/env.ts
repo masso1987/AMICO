@@ -13,6 +13,11 @@ const EnvSchema = z
     JWT_SECRET: z.string().min(32),
     JWT_CUSTOMER_TTL: z.string().default('30m'),
     JWT_STAFF_TTL: z.string().default('15m'),
+    /** Staff must use an authenticator app. Only switch off for local development. */
+    STAFF_TOTP_REQUIRED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
     /** When true every quote/transaction is simulated and only mock adapters load. Forbidden in production. */
     SIMULATION_MODE: z
       .enum(['true', 'false'])
@@ -31,6 +36,10 @@ const EnvSchema = z
     UPLOAD_DIR: z.string().default('./uploads'),
     MAX_EVIDENCE_BYTES: z.coerce.number().int().default(5 * 1024 * 1024),
     CALLBACK_SHARED_SECRET: z.string().min(16).default('dev-callback-secret-change-me'),
+  })
+  .refine((e) => !(['production', 'staging'].includes(e.NODE_ENV) && !e.STAFF_TOTP_REQUIRED), {
+    message: 'STAFF_TOTP_REQUIRED cannot be false in staging or production',
+    path: ['STAFF_TOTP_REQUIRED'],
   })
   .refine((e) => !(e.NODE_ENV === 'production' && e.SIMULATION_MODE), {
     message: 'SIMULATION_MODE must be false in production',

@@ -2,9 +2,10 @@
  * Seed data.
  *
  * Always: the 4 SIM accounts (inactive), the MOCK provider with every capability
- * DISABLED and UNVERIFIED, all 14 routes DISABLED, the chart of accounts, and staff users.
+ * DISABLED and UNVERIFIED, all 14 routes DISABLED and the chart of accounts. No staff:
+ * create the first real administrator with `pnpm --filter @amico/api staff create-admin`.
  *
- * SEED_DEMO=1 (refused in production): marks mock capabilities verified "for simulation",
+ * SEED_DEMO=1 (refused in production): adds the five *@amico.local demo staff, marks mock capabilities verified "for simulation",
  * activates the SIMs, and enables four demo routes with approved pricing rules so the full
  * journey can be exercised. Every transaction in that mode is flagged simulated.
  */
@@ -43,14 +44,14 @@ const STAFF = [
 const DEMO_ROUTES = ['MTN_MOMO__ORANGE_MONEY', 'ORANGE_MONEY__MTN_MOMO', 'MTN_AIRTIME__ORANGE_MONEY', 'MTN_MOMO__MTN_AIRTIME'];
 
 async function main() {
-  // ---- staff
+  // ---- demo staff (SEED_DEMO only). Real accounts: `pnpm --filter @amico/api staff create-admin`.
   const password = env.SEED_STAFF_PASSWORD ?? 'ChangeMe!2026';
   const staffIds: Record<string, string> = {};
-  for (const s of STAFF) {
+  for (const s of demo ? STAFF : []) {
     const row = await prisma.staffUser.upsert({
       where: { email: s.email },
       update: {},
-      create: { email: s.email, fullName: s.fullName, roles: [...s.roles], passwordHash: await argon2.hash(password, { type: argon2.argon2id }) },
+      create: { email: s.email, fullName: s.fullName, roles: [...s.roles], passwordHash: await argon2.hash(password, { type: argon2.argon2id }), mustChangePassword: env.NODE_ENV !== 'test' },
     });
     staffIds[s.email] = row.id;
   }

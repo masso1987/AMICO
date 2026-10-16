@@ -10,6 +10,7 @@ import { ProvidersModule } from './providers/providers.module';
 import { PricingModule } from './pricing/pricing.module';
 import { CatalogueModule } from './catalogue/catalogue.module';
 import { SimsModule } from './sims/sims.module';
+import { StaffModule } from './staff/staff.module';
 import { LedgerModule } from './ledger/ledger.service';
 import { JobsModule } from './jobs/jobs.service';
 import { TransactionStateService } from './transactions/state.service';
@@ -41,6 +42,7 @@ import { HealthController } from './health/health.controller';
     PricingModule,
     CatalogueModule,
     SimsModule,
+    StaffModule,
     // Rate limits apply everywhere except the automated test run (supertest shares one IP).
     ThrottlerModule.forRoot({ throttlers: [{ ttl: 60_000, limit: 300 }], skipIf: () => process.env.NODE_ENV === 'test' }),
   ],

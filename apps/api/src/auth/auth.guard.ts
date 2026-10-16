@@ -63,7 +63,7 @@ export class AuthGuard implements CanActivate {
     const header: string | undefined = req.headers.authorization;
     if (!header?.startsWith('Bearer ')) throw new DomainError('UNAUTHENTICATED', 'Missing bearer token', HttpStatus.UNAUTHORIZED);
 
-    let payload: { sub: string; typ: 'customer' | 'staff' };
+    let payload: { sub: string; typ: 'customer' | 'staff'; sv?: number };
     try {
       payload = await this.jwt.verifyAsync(header.slice(7));
     } catch {
@@ -79,8 +79,10 @@ export class AuthGuard implements CanActivate {
     }
 
     // Staff: roles are re-read on every request so revocation is immediate.
-    const s = await this.prisma.staffUser.findUnique({ where: { id: payload.sub }, select: { id: true, active: true, roles: true } });
+    const s = await this.prisma.staffUser.findUnique({ where: { id: payload.sub }, select: { id: true, active: true, roles: true, sessionVersion: true } });
     if (!s?.active) throw new DomainError('UNAUTHENTICATED', 'Account inactive', HttpStatus.UNAUTHORIZED);
+    // Password change, 2FA reset or deactivation bumps sessionVersion: older tokens die immediately.
+    if (payload.sv !== s.sessionVersion) throw new DomainError('UNAUTHENTICATED', 'Session ended. Sign in again.', HttpStatus.UNAUTHORIZED);
     const permissions = permissionsFor(s.roles);
     const missing = meta.permissions.filter((p) => !permissions.has(p));
     if (missing.length) throw new DomainError('FORBIDDEN', `Missing permission: ${missing.join(', ')}`, HttpStatus.FORBIDDEN);

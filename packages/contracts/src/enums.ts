@@ -80,6 +80,7 @@ export const Permission = {
   REFUND_APPROVE: 'REFUND_APPROVE',
   AUDIT_READ: 'AUDIT_READ',
   REPORT_READ: 'REPORT_READ',
+  STAFF_MANAGE: 'STAFF_MANAGE',
 } as const;
 export type Permission = (typeof Permission)[keyof typeof Permission];
 
@@ -92,7 +93,7 @@ export const ROLE_PERMISSIONS: Record<StaffRole, readonly Permission[]> = {
   ADMIN: [
     'SIM_READ_MASKED', 'SIM_READ_FULL', 'SIM_WRITE', 'CATALOGUE_WRITE', 'PRICING_DRAFT',
     'PRICING_APPROVE', 'PROVIDER_FEE_WRITE', 'PROVIDER_CAPABILITY_WRITE', 'TRANSACTION_READ',
-    'AUDIT_READ', 'REPORT_READ',
+    'AUDIT_READ', 'REPORT_READ', 'STAFF_MANAGE',
   ],
   FINANCE: [
     'SIM_READ_MASKED', 'PRICING_DRAFT', 'PRICING_APPROVE', 'PROVIDER_FEE_WRITE',
