@@ -102,7 +102,8 @@ if command -v pm2 >/dev/null && pm2 jlist 2>/dev/null | grep -q '"name":"amico';
   done
   pm2 save >/dev/null
 elif command -v systemctl >/dev/null && systemctl list-units --type=service --all 'amico*' --no-legend | grep -q amico; then
-  for unit in $(systemctl list-units --type=service --all 'amico*' --no-legend | awk '{print $1}' | grep amico); do
+  # The private Redis keeps running: restarting it is never needed for an update.
+  for unit in $(systemctl list-units --type=service --all 'amico*' --no-legend | awk '{print $1}' | grep amico | grep -v amico-redis); do
     sudo systemctl restart "$unit" && RESTARTED=1 && echo "restarted $unit"
   done
 fi
@@ -111,7 +112,10 @@ fi
 sleep 8
 echo
 if curl -fsS "http://127.0.0.1:${API_PORT}/health"; then echo "  <- API OK"; else echo "API did not answer on port ${API_PORT}. Check its logs."; fi
-for port in 3001 3002; do
+# Ports: read from the systemd units when they exist (new server layout), else the old defaults.
+unit_port() { grep -o -- '-p [0-9]*' "/etc/systemd/system/$1.service" 2>/dev/null | awk '{print $2}'; }
+WEB_PORT=$(unit_port amico-web); ADMIN_PORT=$(unit_port amico-admin)
+for port in ${WEB_PORT:-3001} ${ADMIN_PORT:-3002}; do
   code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}/" || true)
   echo "port ${port}: HTTP ${code}"
 done
