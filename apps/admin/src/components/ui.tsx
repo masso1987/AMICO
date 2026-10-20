@@ -5,9 +5,7 @@ export function Badge({ value, label }: { value: string; label?: string }) {
   return <span className={`badge tone-${STATE_TONE[value] ?? 'neutral'}`}>{label ?? pretty(value)}</span>;
 }
 
-export function SimTag({ on }: { on: boolean }) {
-  return on ? <span className="sim-tag">Simulated</span> : null;
-}
+export { SimTag } from './SimTag';
 
 export function PageHead({ title, sub, back, children }: { title: string; sub?: React.ReactNode; back?: { href: string; label: string }; children?: React.ReactNode }) {
   return (

@@ -1,11 +1,13 @@
-import type { Metadata } from 'next';
 import { Empty, PageHead } from '@/components/ui';
-import { CreateStaff, ManageStaff, type StaffRow } from '@/components/StaffControls';
-import { roleLabel } from '@/lib/roles';
-import { when } from '@/lib/format';
+import { CreateStaff, ManageStaff, type RoleOption, type StaffRow } from '@/components/StaffControls';
+import { getT } from '@/i18n/server';
+import { phone, when } from '@/lib/format';
 import { getStaff, load } from '@/lib/staff';
 
-export const metadata: Metadata = { title: 'Staff accounts' };
+export async function generateMetadata() {
+  const { t } = await getT();
+  return { title: t('nav.staff') };
+}
 
 interface Row extends StaffRow {
   lastLoginAt: string | null;
@@ -13,26 +15,24 @@ interface Row extends StaffRow {
 }
 
 export default async function Staff() {
-  const [rows, me] = await Promise.all([load<Row[]>('/admin/staff'), getStaff()]);
+  const { t, locale } = await getT();
+  const [rows, me, roles] = await Promise.all([load<Row[]>('/admin/staff'), getStaff(), load<RoleOption[]>('/admin/access/roles')]);
   const demo = rows.filter((r) => r.active && r.email.endsWith('@amico.local'));
+  const roleName = (k: string) => roles.find((r) => r.key === k)?.name ?? k;
 
   return (
     <>
-      <PageHead
-        title="Staff accounts"
-        sub="Everyone signs in with their own email, password and authenticator app. Removing a role or switching an account off ends its session at once."
-      />
+      <PageHead title={t('nav.staff')} sub={t('staff.sub')} />
       {demo.length > 0 && (
         <p className="msg err" role="alert" style={{ marginBottom: 16 }}>
-          {demo.length} shared demo account{demo.length > 1 ? 's are' : ' is'} still active ({demo.map((d) => d.email).join(', ')}). Once everyone has their own account, switch
-          {demo.length > 1 ? ' them' : ' it'} off below.
+          {t('staff.demoWarning', { n: demo.length, emails: demo.map((d) => d.email).join(', ') })}
         </p>
       )}
       <div className="grid-2" style={{ gridTemplateColumns: 'minmax(0, 2fr) minmax(300px, 1fr)', alignItems: 'start' }}>
         <section className="card">
-          <h2>People</h2>
+          <h2>{t('staff.people')}</h2>
           {rows.length === 0 ? (
-            <Empty>No staff accounts.</Empty>
+            <Empty>{t('staff.none')}</Empty>
           ) : (
             <div className="staff-list">
               {rows.map((s) => (
@@ -40,27 +40,22 @@ export default async function Staff() {
                   <summary>
                     <span>
                       <strong>{s.fullName}</strong>
-                      {s.id === me.id && <span className="badge" style={{ marginLeft: 6 }}>You</span>}
-                      <span className="sub" style={{ display: 'block' }}>{s.email}</span>
+                      {s.id === me.id && <span className="badge" style={{ marginLeft: 6 }}>{t('staff.you')}</span>}
+                      <span className="sub" style={{ display: 'block' }}>{s.email}{s.phone ? ` · ${phone(s.phone)}` : ''}</span>
                     </span>
-                    <span className="sub">{s.roles.map(roleLabel).join(', ')}</span>
+                    <span className="sub">{s.roles.map(roleName).join(', ')}</span>
                     <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-                      {!s.active && <span className="badge tone-bad">Switched off</span>}
-                      {s.active && (s.twoFactorEnabled ? <span className="badge tone-good">2-step on</span> : <span className="badge tone-review">2-step not set up</span>)}
-                      {s.active && s.mustChangePassword && <span className="badge tone-wait">Temporary password</span>}
+                      {!s.active && <span className="badge tone-bad">{t('staff.off')}</span>}
+                      {s.active && (s.twoFactorEnabled ? <span className="badge tone-good">{t('staff.twoStepOn')}</span> : <span className="badge tone-review">{t('staff.twoStepMissing')}</span>)}
+                      {s.active && s.mustChangePassword && <span className="badge tone-wait">{t('staff.tempPassword')}</span>}
+                      {s.active && s.alertChannels.length > 0 && <span className="badge">{t('staff.getsAlerts')}</span>}
                     </span>
                   </summary>
                   <div className="staff-body">
                     <p className="sub" style={{ margin: '0 0 12px' }}>
-                      Last sign-in: {s.lastLoginAt ? when(s.lastLoginAt) : 'never'} · Created {when(s.createdAt)}
+                      {t('staff.lastSignIn', { at: s.lastLoginAt ? when(s.lastLoginAt, locale) : t('staff.never'), created: when(s.createdAt, locale) })}
                     </p>
-                    {s.id === me.id ? (
-                      <p className="sub" style={{ margin: 0 }}>
-                        This is you. Change your password on <a href="/account">My account</a>; another administrator changes your roles.
-                      </p>
-                    ) : (
-                      <ManageStaff s={s} />
-                    )}
+                    {s.id === me.id ? <p className="sub" style={{ margin: 0 }}>{t('staff.thisIsYou')}</p> : <ManageStaff s={s} roles={roles} />}
                   </div>
                 </details>
               ))}
@@ -68,8 +63,8 @@ export default async function Staff() {
           )}
         </section>
         <section className="card">
-          <h2>Add a staff member</h2>
-          <CreateStaff />
+          <h2>{t('staff.add')}</h2>
+          <CreateStaff roles={roles} />
         </section>
       </div>
     </>

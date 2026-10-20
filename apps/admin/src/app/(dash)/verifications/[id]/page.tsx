@@ -1,34 +1,25 @@
-import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ActionForm } from '@/components/ActionForm';
 import { RevealNumber } from '@/components/RevealNumber';
 import { Badge, KV, PageHead, SimTag } from '@/components/ui';
+import { getT } from '@/i18n/server';
 import { ASSET_LABEL, fcfa, phone, pretty, when } from '@/lib/format';
+import { stateLabel } from '@/lib/labels';
 import { can, getStaff, load } from '@/lib/staff';
 
-export const metadata: Metadata = { title: 'Airtime check' };
+export async function generateMetadata() {
+  const { t } = await getT();
+  return { title: t('verif.title') };
+}
 
 interface Detail {
-  id: string;
-  status: string;
-  version: number;
-  expectedAmount: number;
-  receivingSimId: string;
-  customerReference: string | null;
-  evidenceFileIds: string[];
-  submittedAt: string | null;
-  requiresDualApproval: boolean;
-  receivedAmount: number | null;
-  evidenceNote: string | null;
-  reason: string | null;
-  firstReviewerId: string | null;
-  firstReviewedAt: string | null;
-  secondApproverId: string | null;
-  secondApprovedAt: string | null;
+  id: string; status: string; version: number; expectedAmount: number; receivingSimId: string; customerReference: string | null; evidenceFileIds: string[];
+  submittedAt: string | null; requiresDualApproval: boolean; receivedAmount: number | null; evidenceNote: string | null; reason: string | null;
+  firstReviewerId: string | null; firstReviewedAt: string | null; secondApproverId: string | null; secondApprovedAt: string | null;
   receivingSim: { code: string; label: string; operator: string; msisdnMasked: string };
   transaction: {
     id: string; reference: string; state: string; isSimulated: boolean; senderMsisdn: string; recipientMsisdn: string;
-    customerPays: number; expectedDelivered: number; riskLevel: string; createdAt: string;
+    customerPays: number; expectedDelivered: number; riskLevel: string; createdAt: string; cancelRequestedAt?: string | null;
     service: { name: string; sourceAsset: string; destinationAsset: string };
     history: Array<{ id: string; toState: string; reason: string | null; actorType: string; createdAt: string }>;
   };
@@ -36,9 +27,10 @@ interface Detail {
 }
 
 export default async function VerificationDetail(props: PageProps<'/verifications/[id]'>) {
+  const { t, locale } = await getT();
   const { id } = await props.params;
   const [v, staff] = await Promise.all([load<Detail>(`/admin/verifications/${id}`), getStaff()]);
-  const t = v.transaction;
+  const x = v.transaction;
   const open = ['PENDING', 'ON_HOLD', 'ESCALATED'].includes(v.status);
   const secondStep = v.status === 'AWAITING_SECOND_APPROVAL';
   const iAmFirst = v.firstReviewerId === staff.id;
@@ -46,37 +38,34 @@ export default async function VerificationDetail(props: PageProps<'/verification
 
   return (
     <>
-      <PageHead
-        back={{ href: '/verifications', label: 'Back to airtime checks' }}
-        title={`Check ${t.reference}`}
-        sub={<>{t.service.name} <SimTag on={t.isSimulated} /></>}
-      >
-        <Badge value={v.status} />
+      <PageHead back={{ href: '/verifications', label: t('verif.back') }} title={t('verif.heading', { ref: x.reference })} sub={<>{x.service.name} <SimTag on={x.isSimulated} /></>}>
+        <Badge value={v.status} label={stateLabel(t, v.status)} />
       </PageHead>
+      {x.cancelRequestedAt && <p className="note" role="status">{t('verif.cancelAsked')}</p>}
 
       <div className="grid-2">
         <div className="stack">
           <section className="card">
-            <h2>What to look for on the SIM</h2>
+            <h2>{t('verif.lookFor')}</h2>
             <div className="big-amount">{fcfa(v.expectedAmount)}</div>
-            <p style={{ margin: '4px 0 14px', color: 'var(--muted)' }}>
-              of {ASSET_LABEL[t.service.sourceAsset]} from <strong>{phone(t.senderMsisdn)}</strong>, received on {v.receivingSim.label}
+            <p className="muted" style={{ margin: '4px 0 14px' }}>
+              {t('verif.ofFrom', { asset: ASSET_LABEL[x.service.sourceAsset] ?? '', from: phone(x.senderMsisdn), sim: v.receivingSim.label })}
             </p>
             <KV
               rows={[
-                ['Receiving SIM', can(staff, 'SIM_READ_FULL') ? <RevealNumber simId={v.receivingSimId} masked={v.receivingSim.msisdnMasked} defaultReason={`Verifying airtime for ${t.reference}`} /> : <span className="mono">{v.receivingSim.msisdnMasked}</span>],
-                ['Customer’s SMS reference', <span className="mono" key="r">{v.customerReference ?? '—'}</span>],
-                ['Submitted', when(v.submittedAt)],
-                ['Approval', v.requiresDualApproval ? <span className="risk-high" key="d">Two different approvers required</span> : 'One approver'],
+                [t('verif.sim'), can(staff, 'SIM_READ_FULL') ? <RevealNumber simId={v.receivingSimId} masked={v.receivingSim.msisdnMasked} defaultReason={`Verifying airtime for ${x.reference}`} /> : <span className="mono">{v.receivingSim.msisdnMasked}</span>],
+                [t('verifs.smsRef'), <span className="mono" key="r">{v.customerReference ?? '—'}</span>],
+                [t('verif.submitted'), when(v.submittedAt, locale)],
+                [t('verif.approval'), v.requiresDualApproval ? <span className="risk-high" key="d">{t('verif.dual')}</span> : t('verif.single')],
               ]}
             />
             {v.evidenceFileIds.length > 0 && (
               <div className="evidence" style={{ marginTop: 14 }}>
-                <h2>Customer’s screenshot</h2>
-                <p className="note" style={{ marginTop: 0 }}>Supporting material only. Check the SIM itself before confirming.</p>
+                <h2>{t('verif.screenshot')}</h2>
+                <p className="note" style={{ marginTop: 0 }}>{t('verif.screenshotNote')}</p>
                 {v.evidenceFileIds.map((f) => (
                   <a key={f} href={`/api/proxy/admin/verifications/evidence/${f}`} target="_blank" rel="noreferrer">
-                    <img src={`/api/proxy/admin/verifications/evidence/${f}`} alt="Customer evidence" />
+                    <img src={`/api/proxy/admin/verifications/evidence/${f}`} alt={t('verif.screenshot')} />
                   </a>
                 ))}
               </div>
@@ -85,28 +74,28 @@ export default async function VerificationDetail(props: PageProps<'/verification
 
           {(v.receivedAmount !== null || v.reason) && (
             <section className="card">
-              <h2>Recorded so far</h2>
+              <h2>{t('verif.recorded')}</h2>
               <KV
                 rows={[
-                  ['Amount seen on SIM', fcfa(v.receivedAmount)],
-                  ['Evidence note', v.evidenceNote ?? '—'],
-                  ['Reason', v.reason ?? '—'],
-                  ['First review', v.firstReviewedAt ? `${when(v.firstReviewedAt)}${iAmFirst ? ' (you)' : ''}` : '—'],
-                  ['Second approval', v.secondApprovedAt ? when(v.secondApprovedAt) : '—'],
+                  [t('verif.seen'), fcfa(v.receivedAmount)],
+                  [t('verif.note'), v.evidenceNote ?? '—'],
+                  [t('common.reason'), v.reason ?? '—'],
+                  [t('verif.first'), v.firstReviewedAt ? `${when(v.firstReviewedAt, locale)}${iAmFirst ? ` (${t('staff.you')})` : ''}` : '—'],
+                  [t('verif.secondApproval'), v.secondApprovedAt ? when(v.secondApprovedAt, locale) : '—'],
                 ]}
               />
             </section>
           )}
 
           <section className="card">
-            <h2>Transaction</h2>
+            <h2>{t('txn.title')}</h2>
             <KV
               rows={[
-                ['State', <Badge key="s" value={t.state} />],
-                ['Customer pays', fcfa(t.customerPays)],
-                ['Recipient receives', `${fcfa(t.expectedDelivered)} in ${ASSET_LABEL[t.service.destinationAsset]}`],
-                ['Recipient', phone(t.recipientMsisdn)],
-                ['Details', <Link key="l" href={`/transactions/${t.id}`}>Open transaction</Link>],
+                [t('pricing.status'), <Badge key="s" value={x.state} label={stateLabel(t, x.state)} />],
+                [t('txns.customerPays'), fcfa(x.customerPays)],
+                [t('txn.receives'), t('txn.receivesIn', { amount: fcfa(x.expectedDelivered), asset: ASSET_LABEL[x.service.destinationAsset] ?? '' })],
+                [t('txn.to'), phone(x.recipientMsisdn)],
+                [t('verif.details'), <Link key="l" href={`/transactions/${x.id}`}>{t('verif.openTxn')}</Link>],
               ]}
             />
           </section>
@@ -116,38 +105,38 @@ export default async function VerificationDetail(props: PageProps<'/verification
           {open && can(staff, 'VERIFY_MANUAL') && (
             <>
               <section className="card">
-                <h2>Airtime received</h2>
-                {v.status !== 'PENDING' && <p className="note">This check is {pretty(v.status).toLowerCase()}. Confirm only once the issue is resolved.</p>}
+                <h2>{t('verif.received')}</h2>
+                {v.status !== 'PENDING' && <p className="note">{t('verif.notPending', { status: stateLabel(t, v.status).toLowerCase() })}</p>}
                 <ActionForm
                   path={at('decision')}
                   fixed={{ decision: 'CONFIRM_RECEIVED' }}
                   fields={[
-                    { name: 'receivedAmount', label: 'Amount you see on the SIM (FCFA)', kind: 'fcfa', required: true, hint: 'Type what the SIM shows, not the expected amount. A different amount puts the transaction on hold.' },
-                    { name: 'evidenceNote', label: 'What you checked', kind: 'textarea', required: true, placeholder: 'e.g. Balance SMS 09:42 from 6 51 23 45 67, +5 000 FCFA' },
+                    { name: 'receivedAmount', label: t('verif.amountSeen'), kind: 'fcfa', required: true, hint: t('verif.amountSeenHint') },
+                    { name: 'evidenceNote', label: t('verif.whatChecked'), kind: 'textarea', required: true, placeholder: t('verif.whatCheckedExample') },
                   ]}
-                  submit={v.requiresDualApproval ? 'Record first approval' : 'Confirm and pay out'}
-                  done="Recorded."
+                  submit={v.requiresDualApproval ? t('verif.recordFirst') : t('verif.confirmPay')}
+                  done={t('common.saved')}
                 />
               </section>
               <section className="card">
-                <h2>Not received</h2>
+                <h2>{t('verif.notReceived')}</h2>
                 <ActionForm
                   path={at('decision')}
                   fixed={{ decision: 'NOT_RECEIVED' }}
-                  fields={[{ name: 'reason', label: 'Reason (the customer is told the transfer wasn’t found)', kind: 'textarea', required: true }]}
-                  submit="Reject transfer"
+                  fields={[{ name: 'reason', label: t('verif.rejectReason'), kind: 'textarea', required: true }]}
+                  submit={t('verif.reject')}
                   variant="danger"
-                  confirm="Reject this transfer? The customer will be told we could not find it."
+                  confirm={t('verif.rejectConfirm')}
                 />
               </section>
               {v.status !== 'ESCALATED' && (
                 <section className="card">
-                  <h2>Escalate</h2>
+                  <h2>{t('verif.escalate')}</h2>
                   <ActionForm
                     path={at('decision')}
                     fixed={{ decision: 'ESCALATE' }}
-                    fields={[{ name: 'reason', label: 'What needs a closer look', kind: 'textarea', required: true }]}
-                    submit="Escalate to review"
+                    fields={[{ name: 'reason', label: t('verif.escalateReason'), kind: 'textarea', required: true }]}
+                    submit={t('verif.escalateSubmit')}
                     variant="quiet"
                   />
                 </section>
@@ -157,41 +146,41 @@ export default async function VerificationDetail(props: PageProps<'/verification
 
           {secondStep && (
             <section className="card">
-              <h2>Second approval</h2>
+              <h2>{t('verif.secondApproval')}</h2>
               {iAmFirst ? (
-                <p className="note">You recorded the first approval. A different colleague must check the SIM and approve.</p>
+                <p className="note">{t('verif.youWereFirst')}</p>
               ) : can(staff, 'VERIFY_SECOND_APPROVAL') ? (
                 <ActionForm
                   path={at('second-approval')}
                   fields={[
-                    { name: 'receivedAmount', label: 'Amount you see on the SIM (FCFA)', kind: 'fcfa', required: true, hint: 'Check the SIM yourself. If it differs from the first approver, the transaction goes on hold.' },
-                    { name: 'evidenceNote', label: 'What you checked', kind: 'textarea', required: true },
+                    { name: 'receivedAmount', label: t('verif.amountSeen'), kind: 'fcfa', required: true, hint: t('verif.secondHint') },
+                    { name: 'evidenceNote', label: t('verif.whatChecked'), kind: 'textarea', required: true },
                   ]}
-                  submit="Approve and pay out"
+                  submit={t('verif.approvePay')}
                 />
               ) : (
-                <p className="note">You don’t have permission to give the second approval.</p>
+                <p className="note">{t('verif.noPermission')}</p>
               )}
             </section>
           )}
 
-          {!open && !secondStep && <p className="note info">This check is closed. No further action is possible here.</p>}
+          {!open && !secondStep && <p className="note info">{t('verif.closed')}</p>}
 
           <section className="card">
-            <h2>History</h2>
+            <h2>{t('txn.history')}</h2>
             <ol className="timeline">
-              {t.history.map((h) => (
+              {x.history.map((h) => (
                 <li key={h.id}>
-                  <span className="when">{when(h.createdAt)}</span>
+                  <span className="when">{when(h.createdAt, locale)}</span>
                   <span>
-                    <Badge value={h.toState} /> <span className="why">{h.reason}</span>
+                    <Badge value={h.toState} label={stateLabel(t, h.toState)} /> <span className="why">{h.reason}</span>
                   </span>
                 </li>
               ))}
               {v.audit.map((a) => (
                 <li key={a.id}>
-                  <span className="when">{when(a.createdAt)}</span>
-                  <span className="why">{pretty(a.action.replace('verification.', ''))}{a.actorId === staff.id ? ' (you)' : ''}</span>
+                  <span className="when">{when(a.createdAt, locale)}</span>
+                  <span className="why">{pretty(a.action.replace('verification.', ''))}{a.actorId === staff.id ? ` (${t('staff.you')})` : ''}</span>
                 </li>
               ))}
             </ol>

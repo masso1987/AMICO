@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useId, useState } from 'react';
+import { useI18n } from '@/i18n/client';
 import { callApi, errorText } from '@/lib/client';
 
 export type Field =
@@ -29,7 +30,7 @@ export function ActionForm({
   columns,
 }: {
   path: string;
-  method?: 'POST' | 'PATCH';
+  method?: 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   fields?: Field[];
   fixed?: Record<string, unknown>;
   submit: string;
@@ -40,6 +41,7 @@ export function ActionForm({
   compact?: boolean;
   columns?: boolean;
 }) {
+  const { t } = useI18n();
   const router = useRouter();
   const id = useId();
   const [busy, setBusy] = useState(false);
@@ -63,7 +65,7 @@ export function ActionForm({
       if (f.kind === 'fcfa' || f.kind === 'int') {
         const n = Number(raw.replace(/\s/g, ''));
         if (!Number.isInteger(n)) {
-          setError(`${f.label}: enter a whole number`);
+          setError(t('form.wholeNumber', { field: f.label }));
           return;
         }
         body[f.name] = n;
@@ -80,7 +82,7 @@ export function ActionForm({
       (e.target as HTMLFormElement).reset();
       router.refresh();
     } catch (err) {
-      setError(errorText(err));
+      setError(errorText(err, t));
     } finally {
       setBusy(false);
     }
@@ -136,7 +138,7 @@ export function ActionForm({
         </p>
       )}
       <button className={`btn btn-${variant}`} type="submit" disabled={busy}>
-        {busy ? 'Working…' : submit}
+        {busy ? t('common.working') : submit}
       </button>
     </form>
   );

@@ -1,10 +1,14 @@
-import type { Metadata } from 'next';
 import { ActionForm } from '@/components/ActionForm';
 import { Badge, PageHead } from '@/components/ui';
+import { getT } from '@/i18n/server';
 import { ASSET_LABEL, fcfa } from '@/lib/format';
+import { stateLabel } from '@/lib/labels';
 import { can, getStaff, load } from '@/lib/staff';
 
-export const metadata: Metadata = { title: 'Services' };
+export async function generateMetadata() {
+  const { t } = await getT();
+  return { title: t('nav.services') };
+}
 
 interface Service {
   id: string; code: string; name: string; status: string; sourceAsset: string; destinationAsset: string; processingMethod: string;
@@ -14,32 +18,33 @@ interface Service {
 }
 
 export default async function Services() {
+  const { t } = await getT();
   const [list, staff] = await Promise.all([load<Service[]>('/admin/services'), getStaff()]);
   const write = can(staff, 'CATALOGUE_WRITE');
   return (
     <>
-      <PageHead
-        title="Services"
-        sub="A route can be switched on only when its provider capabilities are verified, it has an approved price, and (for airtime) its receiving SIM is active."
-      />
+      <PageHead title={t('nav.services')} sub={t('services.sub')} />
       <div className="stack">
         {list.map((s) => (
           <section key={s.id} className="card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <div className="row-between" style={{ flexWrap: 'wrap', alignItems: 'flex-start' }}>
               <div>
                 <h2 style={{ marginBottom: 4 }}>
-                  {ASSET_LABEL[s.sourceAsset]} → {ASSET_LABEL[s.destinationAsset]} <Badge value={s.status} />
+                  {ASSET_LABEL[s.sourceAsset]} → {ASSET_LABEL[s.destinationAsset]} <Badge value={s.status} label={stateLabel(t, s.status)} />
                 </h2>
-                <div className="sub" style={{ color: 'var(--muted)', fontSize: 13 }}>
-                  <span className="mono">{s.code}</span>, {s.processingMethod === 'MANUAL_SOURCE' ? `airtime received on ${s.receivingSim ? `${s.receivingSim.code} (${s.receivingSim.msisdnMasked})` : 'no SIM assigned'}` : 'paid through the provider'}
+                <div className="muted small">
+                  <span className="mono">{s.code}</span>,{' '}
+                  {s.processingMethod === 'MANUAL_SOURCE'
+                    ? s.receivingSim ? t('services.receivedOn', { sim: `${s.receivingSim.code} (${s.receivingSim.msisdnMasked})` }) : t('services.noSim')
+                    : t('services.viaProvider')}
                 </div>
               </div>
               {write && (
                 <div>
                   {s.status === 'ENABLED' ? (
-                    <ActionForm path={`admin/services/${s.id}/disable`} fields={[{ name: 'reason', label: 'Reason', kind: 'text', required: true }]} submit="Switch off" variant="danger" compact />
+                    <ActionForm path={`admin/services/${s.id}/disable`} fields={[{ name: 'reason', label: t('common.reason'), kind: 'text', required: true }]} submit={t('services.switchOff')} variant="danger" compact />
                   ) : s.readiness.available ? (
-                    <ActionForm path={`admin/services/${s.id}/enable`} fields={[{ name: 'reason', label: 'Reason', kind: 'text', required: true }]} submit="Switch on" compact />
+                    <ActionForm path={`admin/services/${s.id}/enable`} fields={[{ name: 'reason', label: t('common.reason'), kind: 'text', required: true }]} submit={t('services.switchOn')} compact />
                   ) : null}
                 </div>
               )}
@@ -49,24 +54,25 @@ export default async function Services() {
                 {s.readiness.reasons.map((r) => <li key={r}>{r}</li>)}
               </ul>
             )}
-            <p className="sub" style={{ color: 'var(--muted)', fontSize: 13, margin: '10px 0 0' }}>
-              Quotes valid {Math.round(s.quoteTtlSeconds / 60)} min. Two approvers from {fcfa(s.dualApprovalThreshold)}. Estimated operator fees {s.allowEstimatedProviderFee ? 'allowed' : 'not allowed'}. {s.verificationNotes}
+            <p className="muted small" style={{ margin: '10px 0 0' }}>
+              {t('services.facts', { min: Math.round(s.quoteTtlSeconds / 60), dual: fcfa(s.dualApprovalThreshold) })}{' '}
+              {s.allowEstimatedProviderFee ? t('services.estimateAllowed') : t('services.estimateNotAllowed')} {s.verificationNotes}
             </p>
             {write && (
               <details style={{ marginTop: 10 }}>
-                <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Settings</summary>
+                <summary style={{ cursor: 'pointer', fontWeight: 700 }}>{t('services.settings')}</summary>
                 <div style={{ marginTop: 10 }}>
                   <ActionForm
                     path={`admin/services/${s.id}`}
                     method="PATCH"
                     fields={[
-                      { name: 'quoteTtlSeconds', label: 'Quote validity (seconds)', kind: 'int', defaultValue: s.quoteTtlSeconds },
-                      { name: 'dualApprovalThreshold', label: 'Two approvers from (FCFA)', kind: 'fcfa', defaultValue: s.dualApprovalThreshold },
-                      { name: 'allowEstimatedProviderFee', label: 'Allow quotes with an estimated operator fee', kind: 'checkbox', defaultValue: s.allowEstimatedProviderFee },
-                      { name: 'reason', label: 'Reason for the change', kind: 'text', required: true },
+                      { name: 'quoteTtlSeconds', label: t('services.ttl'), kind: 'int', defaultValue: s.quoteTtlSeconds },
+                      { name: 'dualApprovalThreshold', label: t('services.dual'), kind: 'fcfa', defaultValue: s.dualApprovalThreshold },
+                      { name: 'allowEstimatedProviderFee', label: t('services.allowEstimate'), kind: 'checkbox', defaultValue: s.allowEstimatedProviderFee },
+                      { name: 'reason', label: t('common.reason'), kind: 'text', required: true },
                     ]}
-                    submit="Save settings"
-                    done="Saved."
+                    submit={t('common.save')}
+                    done={t('common.saved')}
                     compact
                   />
                 </div>

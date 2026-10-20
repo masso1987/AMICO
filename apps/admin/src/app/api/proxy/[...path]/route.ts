@@ -5,7 +5,7 @@ import { apiUrl, clearSession, getToken } from '@/lib/session';
  * Staff bridge: forwards only admin endpoints and the staff profile, with the
  * session token attached. The API checks every permission on every call.
  */
-const ALLOWED = [/^admin\/[A-Za-z0-9\-/]+$/, /^auth\/staff\/me$/];
+const ALLOWED = [/^admin\/[A-Za-z0-9_\-/]+$/, /^auth\/staff\/me$/, /^offers\/[0-9a-f-]{36}\/image$/];
 
 async function forward(req: NextRequest, ctx: RouteContext<'/api/proxy/[...path]'>) {
   const { path } = await ctx.params;
@@ -41,3 +41,5 @@ async function forward(req: NextRequest, ctx: RouteContext<'/api/proxy/[...path]
 export const GET = forward;
 export const POST = forward;
 export const PATCH = forward;
+export const PUT = forward;
+export const DELETE = forward;

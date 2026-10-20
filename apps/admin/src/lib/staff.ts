@@ -9,6 +9,9 @@ export interface Staff {
   fullName: string;
   roles: string[];
   permissions: string[];
+  locale: 'en' | 'fr';
+  phone: string | null;
+  alertChannels: Array<'SMS' | 'WHATSAPP'>;
 }
 
 /** Current staff member, fetched once per request. Redirects to sign-in when the session is gone. */

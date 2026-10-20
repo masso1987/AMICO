@@ -144,6 +144,10 @@ describe('sell credit: one rate for both networks', () => {
     try {
       const view = await http(app).get('/admin/pricing/sell-credit').set(finance).expect(200);
       expect(view.body.every((v: { active: { ratePercent: number } }) => v.active.ratePercent === 82.5)).toBe(true);
+      // Customers see the same rate, without signing in, on every open sell-credit route.
+      const pub = await http(app).get('/public/sell-credit').expect(200);
+      expect(pub.body.length).toBeGreaterThan(0);
+      expect(pub.body.every((r: { ratePercent: number; minAmount: number; maxAmount: number }) => r.ratePercent === 82.5 && r.minAmount === 1_000 && r.maxAmount === 500_000)).toBe(true);
       const c = await customer(app);
       const q = await quote(app, c, 'ORANGE_AIRTIME__MTN_MOMO', 10_000);
       expect(q.body).toMatchObject({ totalPayable: 10_000, conversionRate: 0.825 });

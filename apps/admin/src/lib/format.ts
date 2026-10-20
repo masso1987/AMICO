@@ -11,19 +11,20 @@ export function phone(msisdn: string | null | undefined): string {
   return local.replace(/^(\d)(\d{2})(\d{2})(\d{2})(\d{2})$/, '$1 $2 $3 $4 $5');
 }
 
-export function when(iso: string | null | undefined): string {
+export function when(iso: string | Date | null | undefined, locale: 'en' | 'fr' = 'en'): string {
   if (!iso) return '—';
-  return new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Douala' }).format(new Date(iso));
+  return new Intl.DateTimeFormat(locale === 'fr' ? 'fr-FR' : 'en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Douala' }).format(new Date(iso));
 }
 
-export function ago(iso: string | null | undefined): string {
+export function ago(iso: string | Date | null | undefined, locale: 'en' | 'fr' = 'en'): string {
   if (!iso) return '—';
   const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m} min ago`;
+  const fr = locale === 'fr';
+  if (m < 1) return fr ? 'à l’instant' : 'just now';
+  if (m < 60) return fr ? `il y a ${m} min` : `${m} min ago`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} h ${m % 60} min ago`;
-  return `${Math.floor(h / 24)} d ago`;
+  if (h < 24) return fr ? `il y a ${h} h ${m % 60} min` : `${h} h ${m % 60} min ago`;
+  return fr ? `il y a ${Math.floor(h / 24)} j` : `${Math.floor(h / 24)} d ago`;
 }
 
 export const ASSET_LABEL: Record<string, string> = {

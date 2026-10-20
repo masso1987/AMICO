@@ -1,94 +1,106 @@
-import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ActionForm } from '@/components/ActionForm';
 import { Badge, KV, PageHead, SimTag } from '@/components/ui';
+import { getT } from '@/i18n/server';
 import { ASSET_LABEL, fcfa, num, phone, when } from '@/lib/format';
+import { stateLabel } from '@/lib/labels';
 import { can, getStaff, load } from '@/lib/staff';
 
-export const metadata: Metadata = { title: 'Transaction' };
+export async function generateMetadata() {
+  const { t } = await getT();
+  return { title: t('txn.title') };
+}
 
 interface Detail {
   id: string; reference: string; state: string; isSimulated: boolean; riskLevel: string; createdAt: string;
   amount: number; customerPays: number; platformFee: number; providerFee: number; providerFeeCollectedBy: string;
   payoutInstructionAmount: number; expectedDelivered: number; senderMsisdn: string; recipientMsisdn: string;
+  cancelRequestedAt?: string | null; cancelReason?: string | null;
   acceptedTerms: { pricingRuleVersion: number; providerFeeRuleVersion: number | null; acceptedAt: string; quote: { calculationMethod: string; conversionRatePpm: number; assumptions: string[] } };
   service: { code: string; name: string; sourceAsset: string; destinationAsset: string; processingMethod: string };
   manualVerification: { id: string; status: string } | null;
   history: Array<{ id: string; fromState: string | null; toState: string; actorType: string; reason: string | null; createdAt: string }>;
   operations: Array<{ id: string; kind: string; status: string; amount: number; providerCode: string; providerReference: string | null; idempotencyKey: string; statusChecks: number; failureReason: string | null; createdAt: string }>;
   journals: Array<{ id: string; kind: string; book: string; memo: string; createdAt: string; entries: Array<{ id: string; debit: number; credit: number; account: { code: string } }> }>;
-  refunds: Array<{ id: string; amount: number; status: string; reason: string; createdAt: string }>;
+  refunds: Array<{ id: string; amount: number; status: string; reason: string; createdAt: string; kind?: string; feeRetained?: number }>;
 }
 
 export default async function TransactionDetail(props: PageProps<'/transactions/[id]'>) {
+  const { t, locale } = await getT();
   const { id } = await props.params;
-  const [t, staff] = await Promise.all([load<Detail>(`/admin/transactions/${id}`), getStaff()]);
-  const rate = t.acceptedTerms?.quote?.conversionRatePpm ?? 1_000_000;
-  const refundable = ['FAILED', 'UNDER_REVIEW'].includes(t.state) && can(staff, 'REFUND_REQUEST');
+  const [d, staff] = await Promise.all([load<Detail>(`/admin/transactions/${id}`), getStaff()]);
+  const rate = d.acceptedTerms?.quote?.conversionRatePpm ?? 1_000_000;
+  const refundable = ['FAILED', 'UNDER_REVIEW'].includes(d.state) && can(staff, 'REFUND_REQUEST');
 
   return (
     <>
-      <PageHead back={{ href: '/transactions', label: 'Back to transactions' }} title={t.reference} sub={<>{t.service.name} <SimTag on={t.isSimulated} /></>}>
-        <Badge value={t.state} />
+      <PageHead back={{ href: '/transactions', label: t('txn.back') }} title={d.reference} sub={<>{d.service.name} <SimTag on={d.isSimulated} /></>}>
+        <Badge value={d.state} label={stateLabel(t, d.state)} />
       </PageHead>
+
+      {d.cancelRequestedAt && (
+        <p className="note" role="status">{t('txn.cancelAsked', { at: when(d.cancelRequestedAt, locale), reason: d.cancelReason || '—' })}</p>
+      )}
 
       <div className="grid-2">
         <div className="stack">
           <section className="card">
-            <h2>Accepted terms</h2>
+            <h2>{t('txn.terms')}</h2>
             <KV
               rows={[
-                ['Amount', fcfa(t.amount)],
-                ['Customer pays', fcfa(t.customerPays)],
-                ['AMICO fee', fcfa(t.platformFee)],
-                ['Operator fee', `${fcfa(t.providerFee)} (${t.providerFeeCollectedBy === 'PLATFORM' ? 'collected by AMICO' : 'deducted by operator'})`],
-                ...(rate !== 1_000_000 ? [['Conversion rate', `${(rate / 10_000).toFixed(2)}%`] as [string, string]] : []),
-                ['Payout instruction', fcfa(t.payoutInstructionAmount)],
-                ['Recipient receives', `${fcfa(t.expectedDelivered)} in ${ASSET_LABEL[t.service.destinationAsset]}`],
-                ['From', phone(t.senderMsisdn)],
-                ['To', phone(t.recipientMsisdn)],
-                ['Pricing rule', `v${t.acceptedTerms.pricingRuleVersion}${t.acceptedTerms.providerFeeRuleVersion ? `, operator fee rule v${t.acceptedTerms.providerFeeRuleVersion}` : ''}`],
-                ['Accepted', when(t.acceptedTerms.acceptedAt)],
-                ['Risk', t.riskLevel === 'HIGH' ? <span key="r" className="risk-high">High value</span> : 'Normal'],
+                [t('quote.amount'), fcfa(d.amount)],
+                [t('txns.customerPays'), fcfa(d.customerPays)],
+                [t('quote.platformFee'), fcfa(d.platformFee)],
+                [t('quote.providerFee'), `${fcfa(d.providerFee)} (${d.providerFeeCollectedBy === 'PLATFORM' ? t('pfees.byAmico') : t('pfees.byOperator')})`],
+                ...(rate !== 1_000_000 ? [[t('txn.rate'), `${(rate / 10_000).toFixed(2)}%`] as [string, string]] : []),
+                [t('txn.payout'), fcfa(d.payoutInstructionAmount)],
+                [t('txn.receives'), t('txn.receivesIn', { amount: fcfa(d.expectedDelivered), asset: ASSET_LABEL[d.service.destinationAsset] ?? '' })],
+                [t('txn.from'), phone(d.senderMsisdn)],
+                [t('txn.to'), phone(d.recipientMsisdn)],
+                [t('txn.rule'), `v${d.acceptedTerms.pricingRuleVersion}${d.acceptedTerms.providerFeeRuleVersion ? ` · ${t('txn.opRule', { v: d.acceptedTerms.providerFeeRuleVersion })}` : ''}`],
+                [t('txn.accepted'), when(d.acceptedTerms.acceptedAt, locale)],
+                [t('txn.risk'), d.riskLevel === 'HIGH' ? <span key="r" className="risk-high">{t('txns.highValue')}</span> : t('txn.normal')],
               ]}
             />
-            <p className="sub" style={{ color: 'var(--muted)', fontSize: 13, marginBottom: 0 }}>{t.acceptedTerms.quote.calculationMethod}</p>
+            <p className="muted small" style={{ marginBottom: 0 }}>{d.acceptedTerms.quote.calculationMethod}</p>
           </section>
 
           <section className="card">
-            <h2>Provider operations</h2>
-            {t.operations.length === 0 ? (
-              <p style={{ margin: 0, color: 'var(--muted)' }}>No provider calls yet.</p>
+            <h2>{t('txn.operations')}</h2>
+            {d.operations.length === 0 ? (
+              <p className="muted">{t('txn.noOps')}</p>
             ) : (
-              <table className="t">
-                <thead>
-                  <tr><th>Kind</th><th>Status</th><th className="num">Amount</th><th>Provider ref</th><th>Checks</th></tr>
-                </thead>
-                <tbody>
-                  {t.operations.map((o) => (
-                    <tr key={o.id}>
-                      <td>{o.kind}<div className="sub mono">{o.idempotencyKey.split(':').slice(1).join(':')}</div></td>
-                      <td><Badge value={o.status} label={o.status} />{o.failureReason && <div className="sub">{o.failureReason}</div>}</td>
-                      <td className="num">{fcfa(o.amount)}</td>
-                      <td className="mono">{o.providerReference ?? '—'}</td>
-                      <td>{o.statusChecks}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <div className="table-wrap flat">
+                <table className="t">
+                  <thead>
+                    <tr><th>{t('txn.kind')}</th><th>{t('pricing.status')}</th><th className="num">{t('quote.amount')}</th><th>{t('txn.providerRef')}</th><th>{t('txn.checks')}</th></tr>
+                  </thead>
+                  <tbody>
+                    {d.operations.map((o) => (
+                      <tr key={o.id}>
+                        <td>{o.kind}<div className="sub mono">{o.idempotencyKey.split(':').slice(1).join(':')}</div></td>
+                        <td><Badge value={o.status === 'SUCCEEDED' ? 'COMPLETED' : o.status} label={o.status} />{o.failureReason && <div className="sub">{o.failureReason}</div>}</td>
+                        <td className="num">{fcfa(o.amount)}</td>
+                        <td className="mono">{o.providerReference ?? '—'}</td>
+                        <td>{o.statusChecks}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
           </section>
 
           <section className="card">
-            <h2>Ledger</h2>
-            {t.journals.length === 0 ? (
-              <p style={{ margin: 0, color: 'var(--muted)' }}>Nothing posted. Funds are posted when the source is verified.</p>
+            <h2>{t('txn.ledger')}</h2>
+            {d.journals.length === 0 ? (
+              <p className="muted">{t('txn.noLedger')}</p>
             ) : (
-              t.journals.map((j) => (
+              d.journals.map((j) => (
                 <div key={j.id} style={{ marginBottom: 12 }}>
-                  <strong>{j.kind}</strong> <span className="sub" style={{ color: 'var(--muted)' }}>{j.book.toLowerCase()} book, {when(j.createdAt)}</span>
+                  <strong>{j.kind}</strong> <span className="muted small">{j.book === 'REAL' ? t('reports.realBook') : t('reports.simBook')}, {when(j.createdAt, locale)}</span>
                   <table className="t">
-                    <thead><tr><th>Account</th><th className="num">Debit</th><th className="num">Credit</th></tr></thead>
+                    <thead><tr><th>{t('reports.account')}</th><th className="num">{t('txn.debit')}</th><th className="num">{t('txn.credit')}</th></tr></thead>
                     <tbody>
                       {j.entries.map((e) => (
                         <tr key={e.id}>
@@ -106,51 +118,50 @@ export default async function TransactionDetail(props: PageProps<'/transactions/
         </div>
 
         <div className="stack">
-          {t.manualVerification && (
+          {d.manualVerification && (
             <p className="note info">
-              Airtime check: <Badge value={t.manualVerification.status} />{' '}
-              <Link href={`/verifications/${t.manualVerification.id}`}>Open check</Link>
+              {t('txn.airtimeCheck')} <Badge value={d.manualVerification.status} label={stateLabel(t, d.manualVerification.status)} />{' '}
+              <Link href={`/verifications/${d.manualVerification.id}`}>{t('txn.openCheck')}</Link>
             </p>
           )}
 
-          {refundable && t.refunds.every((r) => !['REQUESTED', 'APPROVED', 'PROCESSING'].includes(r.status)) && (
+          {refundable && d.refunds.every((r) => !['REQUESTED', 'APPROVED', 'PROCESSING'].includes(r.status)) && (
             <section className="card">
-              <h2>Request a refund</h2>
-              <p className="sub" style={{ color: 'var(--muted)', marginTop: 0 }}>
-                A second person must approve it. Refunds are blocked while a payout’s outcome is still uncertain.
-              </p>
+              <h2>{t('txn.requestRefund')}</h2>
+              <p className="muted small" style={{ marginTop: 0 }}>{t('txn.refundHelp')}</p>
               <ActionForm
-                path={`admin/transactions/${t.id}/refunds`}
+                path={`admin/transactions/${d.id}/refunds`}
                 fields={[
-                  { name: 'amount', label: `Amount (FCFA, leave empty for the full ${fcfa(t.customerPays)})`, kind: 'fcfa' },
-                  { name: 'reason', label: 'Reason', kind: 'textarea', required: true },
+                  { name: 'amount', label: t('txn.refundAmount', { full: fcfa(d.customerPays) }), kind: 'fcfa' },
+                  { name: 'reason', label: t('common.reason'), kind: 'textarea', required: true },
                 ]}
-                submit="Request refund"
-                done="Refund requested. It now needs approval."
+                submit={t('txn.requestRefund')}
+                done={t('txn.refundRequested')}
               />
             </section>
           )}
 
-          {t.refunds.length > 0 && (
+          {d.refunds.length > 0 && (
             <section className="card">
-              <h2>Refunds</h2>
-              {t.refunds.map((r) => (
+              <h2>{t('nav.refunds')}</h2>
+              {d.refunds.map((r) => (
                 <p key={r.id} style={{ margin: '0 0 6px' }}>
-                  <Badge value={r.status} /> {fcfa(r.amount)} <span className="sub" style={{ color: 'var(--muted)' }}>{r.reason}</span>{' '}
-                  <Link href="/refunds">Manage</Link>
+                  <Badge value={r.status} label={stateLabel(t, r.status)} /> {fcfa(r.amount)}
+                  {r.feeRetained ? <span className="muted small"> ({t('refunds.feeKept', { fee: fcfa(r.feeRetained) })})</span> : null}{' '}
+                  <span className="muted small">{r.reason}</span> <Link href="/refunds">{t('txn.manage')}</Link>
                 </p>
               ))}
             </section>
           )}
 
           <section className="card">
-            <h2>State history</h2>
+            <h2>{t('txn.history')}</h2>
             <ol className="timeline">
-              {t.history.map((h) => (
+              {d.history.map((h) => (
                 <li key={h.id}>
-                  <span className="when">{when(h.createdAt)}</span>
+                  <span className="when">{when(h.createdAt, locale)}</span>
                   <span>
-                    <Badge value={h.toState} /> <span className="why">{h.actorType.toLowerCase()}: {h.reason}</span>
+                    <Badge value={h.toState} label={stateLabel(t, h.toState)} /> <span className="why">{t(`actor.${h.actorType}` as 'actor.STAFF')}: {h.reason}</span>
                   </span>
                 </li>
               ))}

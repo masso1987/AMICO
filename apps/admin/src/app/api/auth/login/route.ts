@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { cookies } from 'next/headers';
 import QRCode from 'qrcode';
+import { isLocale, LOCALE_COOKIE } from '@/i18n/core';
 import { apiUrl, setSession } from '@/lib/session';
 
 /**
@@ -43,6 +44,13 @@ export async function POST(req: NextRequest) {
   if (data.next === 'DONE') {
     jar.delete(CHALLENGE_COOKIE);
     await setSession(data.accessToken);
+    // First sign-in on this browser: use the language saved on the staff account.
+    if (!jar.has(LOCALE_COOKIE)) {
+      const me = await fetch(apiUrl('/auth/staff/me'), { headers: { authorization: `Bearer ${data.accessToken}` }, cache: 'no-store' })
+        .then((r) => r.json())
+        .catch(() => null);
+      if (isLocale(me?.locale)) jar.set(LOCALE_COOKIE, me.locale, { path: '/', sameSite: 'lax', maxAge: 365 * 86_400, secure: process.env.NODE_ENV === 'production' });
+    }
     return NextResponse.json({ next: 'DONE' });
   }
 
